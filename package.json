@@ -8,9 +8,9 @@
   },
   "dependencies": {
     "bowser": "^2.14.1",
-    "hono": "^4.12.2"
+    "hono": "^4.12.3"
   },
   "devDependencies": {
-    "wrangler": "^4.4.0"
+    "wrangler": "^4.69.0"
   }
 }
