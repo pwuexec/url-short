@@ -4,11 +4,7 @@ import { HomePage, StatsPage, NotFound, SearchPage } from './components'
 import type { Visit } from './components'
 import { parseUserAgent, pruneUnknownData } from './user-agent'
 
-type Bindings = {
-  URLS: KVNamespace
-}
-
-const app = new Hono<{ Bindings: Bindings }>()
+const app = new Hono<{ Bindings: CloudflareBindings }>()
 
 type StoredUrl = { target: string; createdAt: string; favicon: string; createdByIp?: string; createdByUa?: string }
 
@@ -123,6 +119,9 @@ app.get('/', async (c) => {
 
 // Create short URL
 app.post('/', async (c) => {
+  const { success: allowed } = await c.env.RL_CREATE.limit({ key: getClientIp(c.req) })
+  if (!allowed) return c.redirect('/?error=ratelimit')
+
   const body = await c.req.parseBody()
   const rawTarget = (body['url'] as string ?? '').trim()
 
@@ -216,6 +215,9 @@ app.get('/:slug/stats', async (c) => {
 
 // Redirect + log visit
 app.get('/:slug', async (c) => {
+  const { success: allowed } = await c.env.RL_REDIRECT.limit({ key: getClientIp(c.req) })
+  if (!allowed) return c.html(<NotFound code={429} message="too many requests" />, 429)
+
   const slug = c.req.param('slug')
   const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
 

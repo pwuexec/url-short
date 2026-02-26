@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(bun add -d @cloudflare/workers-types)",
-      "WebFetch(domain:developers.cloudflare.com)"
+      "WebFetch(domain:developers.cloudflare.com)",
+      "Bash(bun run cf-typegen)",
+      "Bash(bun remove @cloudflare/workers-types)"
     ],
     "additionalDirectories": [
       "e:\\Project\\url-short\\.github"
