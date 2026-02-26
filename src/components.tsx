@@ -515,7 +515,7 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
       <main class="page">{children}</main>
       <footer class="footer">
         <div class="footer-inner">
-          <span>src: <a href="https://github.com/pwuexec/url-shortner" target="_blank" rel="noopener noreferrer">github.com/pwuexec/url-shortner</a></span>
+          <span>src: <a href="https://github.com/pwuexec/url-short" target="_blank" rel="noopener noreferrer">github.com/pwuexec/url-short</a></span>
           <span>logs: ip + ua + geo</span>
         </div>
       </footer>
@@ -543,6 +543,7 @@ export const HomePage: FC<{ created?: string; origin: string; createdFavicon?: s
       </form>
       {error === 'empty' && <p class="hero-error visible">Please enter a URL.</p>}
       {error === 'invalid' && <p class="hero-error visible">Please enter a valid URL.</p>}
+      {error === 'ratelimit' && <p class="hero-error visible">Too many requests. Please slow down.</p>}
     </section>
     {created && (
       <section class="card result-card">
@@ -789,12 +790,12 @@ export const SearchPage: FC<{ error?: string; query?: string }> = ({ error, quer
   </Layout>
 )
 
-export const NotFound: FC = () => (
-  <Layout title="404 Not Found" noindex>
+export const NotFound: FC<{ code?: number; message?: string }> = ({ code = 404, message = 'short url not found' }) => (
+  <Layout title={`${code} Not Found`} noindex>
     <section class="card">
       <div class="not-found">
-        <h1>404</h1>
-        <p>short url not found</p>
+        <h1>{code}</h1>
+        <p>{message}</p>
         <a href="/">home</a>
       </div>
     </section>
