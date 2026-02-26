@@ -1,6 +1,8 @@
 import type { FC } from 'hono/jsx'
 import { isKnownValue, parseUserAgent } from './user-agent'
 
+type User = { id: string; email: string; name: string; picture?: string; createdAt: string }
+
 const css = `
   :root {
     color-scheme: light;
@@ -31,7 +33,7 @@ const css = `
     background: var(--bg);
     color: var(--text);
     line-height: 1.4;
-    min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
   }
@@ -48,29 +50,35 @@ const css = `
   .footer { border-top: 1px solid var(--line); border-bottom: 0; margin-top: auto; }
 
   .topbar-inner, .subbar-inner, .footer-inner, .page, .cookie-banner {
-    width: min(1080px, 96vw);
+    width: min(67.5rem, 96vw);
     margin: 0 auto;
   }
 
   .topbar-inner {
-    min-height: 54px;
+    min-height: 3.375rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: 0.625rem;
+  }
+
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
   }
 
   .subbar-inner {
-    min-height: 42px;
+    min-height: 2.625rem;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.5rem;
     overflow-x: auto;
   }
 
   .brand {
     color: var(--text);
-    font-size: 18px;
+    font-size: 1.125rem;
     font-weight: 700;
   }
   .brand:hover { color: var(--text); text-decoration: none; }
@@ -82,177 +90,242 @@ const css = `
     background: var(--surface);
     color: var(--text);
     font-family: inherit;
-    font-size: 12px;
+    font-size: 0.75rem;
     font-weight: 600;
-    padding: 6px 10px;
+    padding: 0.375rem 0.625rem;
     white-space: nowrap;
   }
-  .nav-item, .subnav-item, .hero-form button {
+  .nav-item, .subnav-item, .hero-form button, .action-link, .result-btn {
     transition: background-color 0.12s ease, color 0.12s ease;
   }
-  .nav-item { cursor: pointer; }
+  .nav-item, .action-link { cursor: pointer; }
   .nav-item:hover,
   .subnav-item:hover,
   .subnav-item.active,
-  .hero-form button:hover {
+  .hero-form button:hover,
+  .action-link:hover,
+  .result-btn:hover {
     background: var(--text);
     color: var(--bg);
     text-decoration: none;
   }
 
-  .page { flex: 1; margin: 16px auto; }
+  .copy-btn { min-width: 4.5rem; text-align: center; }
+  .copy-btn[data-copied="1"] { color: var(--accent); border-color: var(--accent); }
+
+  .user-menu {
+    position: relative;
+  }
+  .user-menu summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.875rem;
+    height: 1.875rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    overflow: hidden;
+    transition: border-color 0.12s ease;
+  }
+  .user-menu summary::-webkit-details-marker { display: none; }
+  .user-menu summary:hover { border-color: var(--accent); }
+  .user-menu[open] summary { border-color: var(--accent); }
+  .user-avatar { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .user-initial {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    font-family: inherit;
+    color: var(--text);
+    line-height: 1;
+  }
+  .user-dropdown {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.3125rem);
+    min-width: 11.875rem;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    z-index: 200;
+  }
+  .dropdown-info {
+    padding: 0.625rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .dropdown-name { font-size: 0.75rem; font-weight: 700; color: var(--text); }
+  .dropdown-email { font-size: 0.6875rem; color: var(--muted); margin-top: 0.125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dropdown-logout {
+    display: block;
+    width: 100%;
+    padding: 0.5rem 0.625rem;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text);
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+  .dropdown-logout:hover { background: var(--text); color: var(--bg); }
+
+  .page { flex: 1; margin: 1rem auto; }
 
   .card {
     border: 1px solid var(--line);
     border-radius: 0;
     background: var(--surface);
-    padding: 14px;
+    padding: 0.875rem;
   }
-  .card + .card { margin-top: 10px; }
-  .action-card { padding: 14px; }
+  .card + .card { margin-top: 0.625rem; }
+  .action-card { padding: 0.875rem; }
 
   h1 {
-    font-size: 22px;
+    font-size: 1.375rem;
     font-weight: 700;
-    margin-bottom: 10px;
+    margin-bottom: 0.625rem;
   }
 
   h2 {
-    font-size: 16px;
-    margin-bottom: 8px;
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
   }
 
   .subtitle {
     color: var(--muted);
-    font-size: 12px;
-    margin-bottom: 10px;
+    font-size: 0.75rem;
+    margin-bottom: 0.625rem;
   }
 
   .hero-form {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 8px;
+    gap: 0.5rem;
   }
 
   .hero-form input {
     min-width: 0;
-    min-height: 38px;
+    min-height: 2.75rem;
     border: 1px solid var(--line);
     border-radius: 0;
     background: var(--surface);
     color: var(--text);
     font-family: inherit;
-    font-size: 13px;
-    padding: 0 10px;
+    font-size: 0.8125rem;
+    padding: 0 0.625rem;
     outline: none;
   }
   .hero-form input.invalid { border-color: var(--danger); }
 
   .hero-form button {
-    min-height: 38px;
+    min-height: 2.75rem;
     border: 1px solid var(--line);
     border-radius: 0;
     background: var(--surface);
     color: var(--text);
     font-family: inherit;
-    font-size: 13px;
+    font-size: 0.8125rem;
     font-weight: 700;
-    padding: 0 12px;
+    padding: 0 0.75rem;
     cursor: pointer;
   }
 
   .hero-error {
-    margin-top: 8px;
+    margin-top: 0.5rem;
     color: var(--danger);
-    font-size: 12px;
+    font-size: 0.75rem;
     display: none;
   }
   .hero-error.visible { display: block; }
 
   .result-label {
-    font-size: 11px;
+    font-size: 0.6875rem;
     color: var(--muted);
-    margin-bottom: 6px;
+    margin-bottom: 0.375rem;
   }
   .result-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 0.5rem;
     flex-wrap: wrap;
   }
-  .result-url { font-size: 18px; font-weight: 700; word-break: break-all; }
+  .result-url { font-size: 1.125rem; font-weight: 700; word-break: break-all; }
 
-  .target-inline { display: inline-flex; align-items: center; gap: 6px; }
-  .favicon {
-    width: 16px;
-    height: 16px;
-    border-radius: 0;
-    border: 1px solid var(--line);
-  }
+  .target-inline { display: inline-flex; align-items: center; gap: 0.375rem; }
+  .favicon { width: 1rem; height: 1rem; }
 
   .stats-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 8px;
+    gap: 0.5rem;
     flex-wrap: wrap;
   }
   .stats-actions {
     display: flex;
-    gap: 6px;
+    gap: 0.375rem;
     flex-wrap: wrap;
-    font-size: 12px;
+    font-size: 0.75rem;
+    padding-top: 0.375rem;
   }
+  .stats-slug-label { font-size: 0.6875rem; color: var(--muted); margin-bottom: 0.25rem; }
+  .stats-slug { font-size: 1.375rem; font-weight: 700; margin-bottom: 0; line-height: 1.2; }
+  .stats-slug-origin { color: var(--muted); font-weight: 400; }
   .stats-target {
-    margin-top: 8px;
-    font-size: 12px;
-    color: var(--muted);
+    margin-top: 0.625rem;
+    font-size: 0.8125rem;
     word-break: break-all;
   }
+  .favicon-lg { width: 1.25rem; height: 1.25rem; flex-shrink: 0; }
+  .table-actions { display: flex; gap: 0.25rem; align-items: center; }
+
+  .dashboard-table { min-width: 35rem; }
 
   .stat-cards {
-    margin-top: 10px;
+    margin-top: 0.625rem;
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
+    gap: 0.5rem;
   }
   .stat-card {
     border: 1px solid var(--line);
     border-radius: 0;
-    padding: 8px;
+    padding: 0.5rem;
   }
-  .stat-card .label { font-size: 11px; color: var(--muted); }
-  .stat-card .value { margin-top: 4px; font-size: 18px; font-weight: 700; }
+  .stat-card .label { font-size: 0.6875rem; color: var(--muted); }
+  .stat-card .value { margin-top: 0.25rem; font-size: 1.125rem; font-weight: 700; }
 
   .table-wrap {
-    margin-top: 10px;
+    margin-top: 0.625rem;
     overflow-x: auto;
     border: 1px solid var(--line);
   }
   .visits-table {
     width: 100%;
-    min-width: 960px;
+    min-width: 60rem;
     border-collapse: collapse;
     font-family: inherit;
   }
   .visits-table th, .visits-table td {
     border-bottom: 1px solid var(--line);
     text-align: left;
-    padding: 8px;
-    font-size: 12px;
+    padding: 0.5rem;
+    font-size: 0.75rem;
     vertical-align: top;
   }
-  .visits-table th { font-size: 11px; color: var(--muted); }
+  .visits-table th { font-size: 0.6875rem; color: var(--muted); }
   .visits-table tr:last-child td { border-bottom: 0; }
 
-  .mono { font-family: inherit; font-size: 12px; }
+  .mono { font-family: inherit; font-size: 0.75rem; }
   .country-badge {
     display: inline-block;
     border: 1px solid var(--line);
     border-radius: 0;
-    font-size: 11px;
-    padding: 2px 6px;
+    font-size: 0.6875rem;
+    padding: 0.125rem 0.375rem;
   }
 
   .action-link.disabled { pointer-events: none; opacity: 0.5; text-decoration: none; }
@@ -261,81 +334,81 @@ const css = `
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.45);
-    padding: 16px;
+    padding: 1rem;
     display: flex;
     align-items: center;
     justify-content: center;
   }
   .dialog {
-    width: min(860px, 100%);
+    width: min(53.75rem, 100%);
     border: 1px solid var(--line);
     background: var(--surface);
   }
   .dialog-header {
     border-bottom: 1px solid var(--line);
-    padding: 10px;
+    padding: 0.625rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 8px;
+    gap: 0.5rem;
   }
-  .dialog-title { font-size: 14px; font-weight: 700; }
-  .dialog-body { padding: 10px; }
+  .dialog-title { font-size: 0.875rem; font-weight: 700; }
+  .dialog-body { padding: 0.625rem; }
 
   .map-embed {
     width: 100%;
-    height: 420px;
+    height: 26.25rem;
     border: 1px solid var(--line);
   }
 
   .empty {
     color: var(--muted);
-    font-size: 12px;
-    padding: 4px 0;
+    font-size: 0.75rem;
+    padding: 0.25rem 0;
   }
 
   .not-found {
     text-align: center;
-    padding: 20px 10px;
+    padding: 1.25rem 0.625rem;
   }
-  .not-found h1 { font-size: 42px; margin-bottom: 4px; }
-  .not-found p { color: var(--muted); margin-bottom: 8px; }
+  .not-found h1 { font-size: 2.625rem; margin-bottom: 0.25rem; }
+  .not-found p { color: var(--muted); margin-bottom: 0.5rem; }
 
   .footer-inner {
-    min-height: 44px;
+    min-height: 2.75rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6px;
+    gap: 0.375rem;
     flex-wrap: wrap;
-    font-size: 11px;
+    font-size: 0.6875rem;
     color: var(--muted);
-    padding: 8px 0;
+    padding: 0.5rem 0;
   }
 
   .cookie-banner {
     position: fixed;
     left: 50%;
     transform: translateX(-50%);
-    bottom: 10px;
+    bottom: 0.625rem;
     border: 1px solid var(--line);
     background: var(--surface);
-    font-size: 11px;
+    font-size: 0.6875rem;
   }
   .cookie-banner-inner {
-    padding: 8px;
+    padding: 0.5rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 0.5rem;
     flex-wrap: wrap;
   }
 
-  @media (max-width: 800px) {
+  @media (max-width: 50rem) {
     .stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 
-  @media (max-width: 560px) {
+  @media (max-width: 35rem) {
     .hero-form { grid-template-columns: 1fr; }
     .hero-form button { width: 100%; }
     .stat-cards { grid-template-columns: 1fr; }
@@ -403,6 +476,25 @@ const heroFormTrimScript = `
   })();
 `
 
+const copyScript = `
+  (function () {
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-copy]');
+      if (!btn) return;
+      var text = btn.getAttribute('data-copy');
+      navigator.clipboard.writeText(text).then(function () {
+        var orig = btn.textContent;
+        btn.setAttribute('data-copied', '1');
+        btn.textContent = 'Copied!';
+        setTimeout(function () {
+          btn.removeAttribute('data-copied');
+          btn.textContent = orig;
+        }, 1500);
+      });
+    });
+  })();
+`
+
 const cookieBannerScript = `
   (function () {
     var banner = document.getElementById('cookie-banner');
@@ -420,6 +512,46 @@ const cookieBannerScript = `
         try { localStorage.setItem('cookie-ok', '1'); } catch (_) {}
       });
     }
+  })();
+`
+
+const claimStoreScript = `
+  (function () {
+    try {
+      var params = new URLSearchParams(location.search);
+      var slug = params.get('created');
+      var token = params.get('ct');
+      if (!slug || !token) return;
+      var claims = {};
+      try { claims = JSON.parse(localStorage.getItem('url-short:claims') || '{}'); } catch (_) {}
+      claims[slug] = token;
+      localStorage.setItem('url-short:claims', JSON.stringify(claims));
+      params.delete('ct');
+      var qs = params.toString();
+      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+    } catch (_) {}
+  })();
+`
+
+const autoClaimScript = `
+  (function () {
+    try {
+      var raw = localStorage.getItem('url-short:claims');
+      if (!raw) return;
+      var claims = JSON.parse(raw);
+      var keys = Object.keys(claims);
+      if (keys.length === 0) return;
+      var pairs = keys.map(function (k) { return { slug: k, token: claims[k] }; });
+      localStorage.removeItem('url-short:claims');
+      var onDashboard = location.pathname === '/dashboard';
+      fetch('/api/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slugs: pairs }),
+      }).then(function () {
+        if (onDashboard) location.reload();
+      }).catch(function () {});
+    } catch (_) {}
   })();
 `
 
@@ -468,15 +600,16 @@ function getLocationName(visit: Visit): string {
   return [visit.city, visit.region, visit.country].filter(Boolean).join(', ') || 'Unknown'
 }
 
-type NavLinkKey = 'shorten' | 'analytics'
+type NavLinkKey = 'shorten' | 'analytics' | 'dashboard'
 
 function getActiveNavLink(pathname: string): NavLinkKey {
   const normalizedPath = pathname.split('?')[0]
+  if (normalizedPath === '/dashboard') return 'dashboard'
   if (normalizedPath === '/search' || normalizedPath.endsWith('/stats')) return 'analytics'
   return 'shorten'
 }
 
-export const Layout: FC<{ children: any; title?: string; description?: string; noindex?: boolean; pathname?: string }> = ({ children, title, description, noindex, pathname = '/' }) => {
+export const Layout: FC<{ children: any; title?: string; description?: string; noindex?: boolean; pathname?: string; user?: User | null }> = ({ children, title, description, noindex, pathname = '/', user }) => {
   const pageTitle = title ? `${title} - url short` : 'url short'
   const activeNavLink = getActiveNavLink(pathname)
   return (
@@ -500,15 +633,41 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
             <a class="brand" href="/">
               url<span class="brand-mark">/</span>short
             </a>
-            <button id="theme-toggle" class="nav-item" type="button" aria-pressed="false" aria-label="Toggle theme">
-              <span id="theme-toggle-label">Dark mode</span>
-            </button>
+            <div class="topbar-actions">
+              <button id="theme-toggle" class="nav-item" type="button" aria-pressed="false" aria-label="Toggle theme">
+                <span id="theme-toggle-label">Dark mode</span>
+              </button>
+              {user ? (
+                <details class="user-menu">
+                  <summary>
+                    {user.picture
+                      ? <img class="user-avatar" src={user.picture} alt={user.name} />
+                      : <span class="user-initial">{user.name.charAt(0).toUpperCase()}</span>
+                    }
+                  </summary>
+                  <div class="user-dropdown">
+                    <div class="dropdown-info">
+                      <div class="dropdown-name">{user.name}</div>
+                      <div class="dropdown-email">{user.email}</div>
+                    </div>
+                    <form method="post" action="/auth/logout">
+                      <button class="dropdown-logout" type="submit">logout</button>
+                    </form>
+                  </div>
+                </details>
+              ) : (
+                <a class="nav-item" href="/auth/google">login with google</a>
+              )}
+            </div>
           </div>
         </div>
         <div class="subbar">
           <div class="subbar-inner">
             <a class={`subnav-item${activeNavLink === 'shorten' ? ' active' : ''}`} href="/">Shorten a link</a>
             <a class={`subnav-item${activeNavLink === 'analytics' ? ' active' : ''}`} href="/search">Find analytics</a>
+            {user && (
+              <a class={`subnav-item${activeNavLink === 'dashboard' ? ' active' : ''}`} href="/dashboard">My links</a>
+            )}
           </div>
         </div>
       </header>
@@ -528,13 +687,18 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
       <script dangerouslySetInnerHTML={{ __html: themeToggleScript }} />
       <script dangerouslySetInnerHTML={{ __html: cookieBannerScript }} />
       <script dangerouslySetInnerHTML={{ __html: heroFormTrimScript }} />
+      <script dangerouslySetInnerHTML={{ __html: copyScript }} />
+      <script dangerouslySetInnerHTML={{ __html: claimStoreScript }} />
+      {user && <script dangerouslySetInnerHTML={{ __html: autoClaimScript }} />}
     </body>
   </html>
   )
 }
 
-export const HomePage: FC<{ created?: string; origin: string; createdFavicon?: string; error?: string; inputValue?: string }> = ({ created, origin, createdFavicon, error, inputValue }) => (
-  <Layout description="Raw URL shortener. Fast and simple." pathname="/">
+type CreatedUrlData = { target: string; favicon: string; createdAt: string }
+
+export const HomePage: FC<{ created?: string; origin: string; createdUrlData?: CreatedUrlData; error?: string; inputValue?: string; user?: User | null }> = ({ created, origin, createdUrlData, error, inputValue, user }) => (
+  <Layout description="Raw URL shortener. Fast and simple." pathname="/" user={user}>
     <section class="card action-card">
       <h1>raw url shortener</h1>
       <form class="hero-form" method="post" action="/">
@@ -544,17 +708,56 @@ export const HomePage: FC<{ created?: string; origin: string; createdFavicon?: s
       {error === 'empty' && <p class="hero-error visible">Please enter a URL.</p>}
       {error === 'invalid' && <p class="hero-error visible">Please enter a valid URL.</p>}
       {error === 'ratelimit' && <p class="hero-error visible">Too many requests. Please slow down.</p>}
+      {!user && (
+        <p class="subtitle" style="margin-top: 0.5rem; margin-bottom: 0">
+          <a href="/auth/google">sign in</a> to keep track of your links
+        </p>
+      )}
     </section>
     {created && (
       <section class="card result-card">
-        <div class="result-label">created</div>
-        <div class="result-row">
-          <span class="target-inline result-url">
-            {createdFavicon && <img class="favicon" src={createdFavicon} alt="" loading="lazy" />}
-            <a href={`/${created}`}>{stripProtocol(origin)}/{created}</a>
-          </span>
-          <a class="result-btn" href={`/${created}/stats`}>stats</a>
+        <script dangerouslySetInnerHTML={{ __html: `(function(){try{navigator.clipboard.writeText(${JSON.stringify(`${origin}/${created}`)})}catch(_){}})()` }} />
+        <div class="result-label">created &amp; copied to clipboard</div>
+        <div class="table-wrap" style="margin-top: 8px">
+          <table class="visits-table dashboard-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Short URL</th>
+                <th>Target</th>
+                <th>Created</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="width: 28px; padding-right: 0">
+                  {createdUrlData?.favicon && <img class="favicon-lg" src={createdUrlData.favicon} alt="" loading="lazy" />}
+                </td>
+                <td style="white-space: nowrap; font-weight: 700">
+                  <span class="stats-slug-origin">{stripProtocol(origin)}/</span><a href={`/${created}`} target="_blank" rel="noopener noreferrer">{created}</a>
+                </td>
+                <td style="max-width: 320px">
+                  <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px">
+                    {createdUrlData?.target && <a href={createdUrlData.target} target="_blank" rel="noopener noreferrer" style="color: var(--muted)">{stripProtocol(createdUrlData.target)}</a>}
+                  </div>
+                </td>
+                <td style="white-space: nowrap; color: var(--muted)">{createdUrlData?.createdAt ? formatUtcAndLocal(createdUrlData.createdAt).utc : '-'}</td>
+                <td>
+                  <div class="table-actions">
+                    <button class="action-link copy-btn" type="button" data-copy={`${origin}/${created}`}>copy</button>
+                    <a class="action-link" href={`/${created}/stats`}>stats</a>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+        {!user && (
+          <p class="subtitle" style="margin-top: 0.625rem; margin-bottom: 0">
+            <a href="/auth/google">sign in with google</a> to claim this link — it will appear in your dashboard automatically.
+          </p>
+        )}
       </section>
     )}
   </Layout>
@@ -579,6 +782,7 @@ export const StatsPage: FC<{
   selectedMapIndex?: number
   selectedUaIndex?: number
   origin: string
+  user?: User | null
 }> = ({
   slug,
   target,
@@ -587,6 +791,7 @@ export const StatsPage: FC<{
   selectedMapIndex,
   selectedUaIndex,
   origin,
+  user,
 }) => {
   const countries = new Set(visits.map((v) => v.country)).size
   const uniqueIps = new Set(visits.map((v) => v.ip)).size
@@ -601,25 +806,26 @@ export const StatsPage: FC<{
   const showUaDialog = !showMapDialog && Boolean(selectedUaVisit && selectedUaParsed)
 
   return (
-    <Layout title={slug} description={`${visits.length} visit${visits.length !== 1 ? 's' : ''} - ${stripProtocol(target)}`} noindex pathname={`/${slug}/stats`}>
+    <Layout title={slug} description={`${visits.length} visit${visits.length !== 1 ? 's' : ''} - ${stripProtocol(target)}`} noindex pathname={`/${slug}/stats`} user={user}>
       <section class="card">
         <div class="stats-header">
-          <h1>
-            <a href={`/${slug}`} target="_blank" rel="noopener noreferrer">
-              {stripProtocol(origin)}/{slug}
-            </a>
-          </h1>
+          <div>
+            <div class="stats-slug-label">short url</div>
+            <h1 class="stats-slug">
+              <span class="stats-slug-origin">{stripProtocol(origin)}/</span><a href={`/${slug}`} target="_blank" rel="noopener noreferrer">{slug}</a>
+            </h1>
+          </div>
           <div class="stats-actions">
             <a href={`/${slug}/stats?view=json`} target="_blank" rel="noopener noreferrer">json</a>
             <a href="/">home</a>
           </div>
         </div>
-        <p class="stats-target">
+        <div class="stats-target">
           <span class="target-inline">
-            {favicon && <img class="favicon" src={favicon} alt="" loading="lazy" />}
+            {favicon && <img class="favicon-lg" src={favicon} alt="" loading="lazy" />}
             <a href={target} target="_blank" rel="noopener noreferrer">{stripProtocol(target)}</a>
           </span>
-        </p>
+        </div>
 
         <div class="stat-cards">
           <div class="stat-card">
@@ -688,12 +894,14 @@ export const StatsPage: FC<{
                       <td>{parsed.os}</td>
                       <td>{parsed.device}</td>
                       <td>
-                        {mapLink ? (
-                          <a class="action-link" href={`/${slug}/stats?map=${idx}`}>map</a>
-                        ) : (
-                          <span class="action-link disabled">n/a</span>
-                        )}
-                        <a class="action-link" href={`/${slug}/stats?ua=${idx}`} style="margin-left: 6px">UA</a>
+                        <div class="table-actions">
+                          {mapLink ? (
+                            <a class="action-link" href={`/${slug}/stats?map=${idx}`}>map</a>
+                          ) : (
+                            <span class="action-link disabled">n/a</span>
+                          )}
+                          <a class="action-link" href={`/${slug}/stats?ua=${idx}`}>ua</a>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -767,8 +975,8 @@ export const StatsPage: FC<{
   )
 }
 
-export const SearchPage: FC<{ error?: string; query?: string }> = ({ error, query }) => (
-  <Layout title="Find" pathname="/search">
+export const SearchPage: FC<{ error?: string; query?: string; user?: User | null }> = ({ error, query, user }) => (
+  <Layout title="Find" pathname="/search" user={user}>
     <section class="card action-card">
       <h1>find stats</h1>
       <p class="subtitle">slug or short url</p>
@@ -798,6 +1006,64 @@ export const NotFound: FC<{ code?: number; message?: string }> = ({ code = 404, 
         <p>{message}</p>
         <a href="/">home</a>
       </div>
+    </section>
+  </Layout>
+)
+
+type DashboardLink = { slug: string; target: string; favicon: string; createdAt: string }
+
+export const DashboardPage: FC<{ user: User; links: DashboardLink[]; origin: string }> = ({ user, links, origin }) => (
+  <Layout title="My links" pathname="/dashboard" user={user}>
+    <section class="card">
+      <div class="stats-header">
+        <div>
+          <h1 style="margin-bottom: 0">my links</h1>
+        </div>
+        <div class="stats-actions">
+          <a class="nav-item" href="/">+ new link</a>
+        </div>
+      </div>
+      {links.length === 0 ? (
+        <p class="empty" style="margin-top: 10px">No links yet. <a href="/">Shorten one now.</a></p>
+      ) : (
+        <div class="table-wrap" style="margin-top: 10px">
+          <table class="visits-table dashboard-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Short URL</th>
+                <th>Target</th>
+                <th>Created</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {links.map((link) => (
+                <tr>
+                  <td style="width: 28px; padding-right: 0">
+                    <img class="favicon-lg" src={link.favicon} alt="" loading="lazy" />
+                  </td>
+                  <td style="white-space: nowrap; font-weight: 700">
+                    <span class="stats-slug-origin">{stripProtocol(origin)}/</span><a href={`/${link.slug}`} target="_blank" rel="noopener noreferrer">{link.slug}</a>
+                  </td>
+                  <td style="max-width: 320px">
+                    <div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px">
+                      <a href={link.target} target="_blank" rel="noopener noreferrer" style="color: var(--muted)">{stripProtocol(link.target)}</a>
+                    </div>
+                  </td>
+                  <td style="white-space: nowrap; color: var(--muted)">{formatUtcAndLocal(link.createdAt).utc}</td>
+                  <td>
+                    <div class="table-actions">
+                      <button class="action-link copy-btn" type="button" data-copy={`${origin}/${link.slug}`}>copy</button>
+                      <a class="action-link" href={`/${link.slug}/stats`}>stats</a>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   </Layout>
 )

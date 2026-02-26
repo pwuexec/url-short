@@ -4,10 +4,14 @@
       "Bash(bun add -d @cloudflare/workers-types)",
       "WebFetch(domain:developers.cloudflare.com)",
       "Bash(bun run cf-typegen)",
-      "Bash(bun remove @cloudflare/workers-types)"
+      "Bash(bun remove @cloudflare/workers-types)",
+      "WebFetch(domain:github.com)",
+      "Bash(bun add @hono/oauth-providers)",
+      "Bash(bunx tsc --noEmit)"
     ],
     "additionalDirectories": [
-      "e:\\Project\\url-short\\.github"
+      "e:\\Project\\url-short\\.github",
+      "C:\\Users\\pwuexec\\.claude\\projects\\e--Project-url-short"
     ]
   }
 }

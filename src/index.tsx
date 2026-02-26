@@ -1,15 +1,24 @@
 import { Hono } from 'hono'
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import type { HonoRequest } from 'hono'
-import { HomePage, StatsPage, NotFound, SearchPage } from './components'
+import { googleAuth } from '@hono/oauth-providers/google'
+import { HomePage, StatsPage, NotFound, SearchPage, DashboardPage } from './components'
 import type { Visit } from './components'
 import { parseUserAgent, pruneUnknownData } from './user-agent'
 
-const app = new Hono<{ Bindings: CloudflareBindings }>()
+type User = { id: string; email: string; name: string; picture?: string; createdAt: string }
+type Session = { userId: string; expiresAt: string }
+type StoredUrl = { target: string; createdAt: string; favicon: string; createdByIp?: string; createdByUa?: string; createdByUserId?: string; claimToken?: string }
 
-type StoredUrl = { target: string; createdAt: string; favicon: string; createdByIp?: string; createdByUa?: string }
+const app = new Hono<{ Bindings: CloudflareBindings; Variables: { user: User | null } }>()
 
 const urlKey = (slug: string) => `url:${slug}`
 const statsKey = (slug: string) => `stats:${slug}`
+const sessionKey = (token: string) => `session:${token}`
+const userKey = (id: string) => `user:${id}`
+const userUrlKey = (userId: string, slug: string) => `userurl:${userId}:${slug}`
+
+const SESSION_TTL = 60 * 60 * 24 * 30 // 30 days in seconds
 
 function getClientIp(req: HonoRequest): string {
   return req.header('cf-connecting-ip') ?? req.header('x-forwarded-for') ?? 'unknown'
@@ -93,26 +102,116 @@ function parseVisitIndex(raw: string | undefined, max: number): number | undefin
   return value
 }
 
+// Session middleware — runs on every request
+app.use('*', async (c, next) => {
+  const token = getCookie(c, 'session')
+  if (token) {
+    const sessionData = await c.env.URLS.get(sessionKey(token), 'json') as Session | null
+    if (sessionData && new Date(sessionData.expiresAt) > new Date()) {
+      const userData = await c.env.URLS.get(userKey(sessionData.userId), 'json') as User | null
+      c.set('user', userData)
+    } else {
+      c.set('user', null)
+    }
+  } else {
+    c.set('user', null)
+  }
+  await next()
+})
+
+// Google OAuth middleware — mounted at request time to access c.env
+app.use('/auth/google', (c, next) =>
+  googleAuth({
+    client_id: c.env.GOOGLE_CLIENT_ID,
+    client_secret: c.env.GOOGLE_CLIENT_SECRET,
+    scope: ['openid', 'email', 'profile'],
+  })(c, next)
+)
+
+// Google OAuth callback handler
+app.get('/auth/google', async (c) => {
+  const googleUser = c.get('user-google') as { id: string; email: string; name: string; picture?: string } | undefined
+  if (!googleUser) return c.redirect('/?error=auth')
+
+  const user: User = {
+    id: googleUser.id,
+    email: googleUser.email,
+    name: googleUser.name,
+    picture: googleUser.picture,
+    createdAt: (await c.env.URLS.get(userKey(googleUser.id), 'json') as User | null)?.createdAt ?? new Date().toISOString(),
+  }
+  await c.env.URLS.put(userKey(user.id), JSON.stringify(user))
+
+  const token = crypto.randomUUID()
+  const expiresAt = new Date(Date.now() + SESSION_TTL * 1000).toISOString()
+  await c.env.URLS.put(sessionKey(token), JSON.stringify({ userId: user.id, expiresAt }), { expirationTtl: SESSION_TTL })
+
+  setCookie(c, 'session', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: SESSION_TTL,
+  })
+
+  return c.redirect('/dashboard')
+})
+
+// Logout
+app.post('/auth/logout', async (c) => {
+  const token = getCookie(c, 'session')
+  if (token) {
+    await c.env.URLS.delete(sessionKey(token))
+  }
+  deleteCookie(c, 'session', { path: '/' })
+  return c.redirect('/')
+})
+
+// Dashboard
+app.get('/dashboard', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.redirect('/auth/google')
+
+  const listResult = await c.env.URLS.list({ prefix: `userurl:${user.id}:` })
+  const slugs = listResult.keys.map((k) => k.name.replace(`userurl:${user.id}:`, ''))
+
+  const urlEntries = await Promise.all(
+    slugs.map(async (slug) => {
+      const data = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
+      return data ? { slug, ...data } : null
+    })
+  )
+
+  const links = urlEntries
+    .filter((e): e is NonNullable<typeof e> => e !== null)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+
+  const origin = new URL(c.req.url).origin
+  return c.html(<DashboardPage user={user} links={links} origin={origin} />)
+})
+
 // Home page
 app.get('/', async (c) => {
   const created = c.req.query('created')
   const error = c.req.query('error')
   const inputValue = c.req.query('url')
   const origin = new URL(c.req.url).origin
-  let createdFavicon: string | undefined
+  const user = c.get('user')
+  let createdUrlData: { target: string; favicon: string; createdAt: string } | undefined
 
   if (created) {
-    const createdData = await c.env.URLS.get(urlKey(created), 'json') as StoredUrl | null
-    if (createdData) createdFavicon = resolveFavicon(createdData)
+    const data = await c.env.URLS.get(urlKey(created), 'json') as StoredUrl | null
+    if (data) createdUrlData = { target: data.target, favicon: resolveFavicon(data), createdAt: data.createdAt }
   }
 
   return c.html(
     <HomePage
       created={created}
       origin={origin}
-      createdFavicon={createdFavicon}
+      createdUrlData={createdUrlData}
       error={error}
       inputValue={inputValue}
+      user={user}
     />
   )
 })
@@ -135,23 +234,64 @@ app.post('/', async (c) => {
     slug = generateSlug()
   }
 
+  const user = c.get('user')
+  const claimToken = user ? undefined : crypto.randomUUID()
   await c.env.URLS.put(urlKey(slug), JSON.stringify({
     target,
     favicon: buildFaviconUrl(target),
     createdAt: new Date().toISOString(),
     createdByIp: getClientIp(c.req),
     createdByUa: c.req.header('user-agent') ?? 'unknown',
+    ...(user ? { createdByUserId: user.id } : { claimToken }),
   }))
   await c.env.URLS.put(statsKey(slug), JSON.stringify({ visits: [] }))
 
-  return c.redirect(`/?created=${slug}`)
+  if (user) {
+    await c.env.URLS.put(userUrlKey(user.id, slug), '1')
+  }
+
+  return c.redirect(user ? `/?created=${slug}` : `/?created=${slug}&ct=${claimToken}`)
+})
+
+// Claim anonymous links after login
+app.post('/api/claim', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.json({ error: 'unauthorized' }, 401)
+
+  let body: { slugs?: unknown }
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+
+  if (!Array.isArray(body?.slugs)) return c.json({ error: 'invalid' }, 400)
+
+  const items = (body.slugs as unknown[]).slice(0, 50)
+
+  await Promise.all(items.map(async (item) => {
+    if (!item || typeof item !== 'object') return
+    const { slug, token } = item as Record<string, unknown>
+    if (typeof slug !== 'string' || typeof token !== 'string') return
+    if (!/^[a-z0-9]{1,20}$/.test(slug)) return
+
+    const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
+    if (!urlData) return
+    if (urlData.createdByUserId) return // already owned
+    if (!urlData.claimToken || urlData.claimToken !== token) return // wrong token
+
+    const { claimToken: _, ...rest } = urlData
+    await Promise.all([
+      c.env.URLS.put(urlKey(slug), JSON.stringify({ ...rest, createdByUserId: user.id })),
+      c.env.URLS.put(userUrlKey(user.id, slug), '1'),
+    ])
+  }))
+
+  return c.json({ ok: true })
 })
 
 // Search page
 app.get('/search', async (c) => {
   const q = (c.req.query('q') ?? '').trim()
+  const user = c.get('user')
 
-  if (!q) return c.html(<SearchPage />)
+  if (!q) return c.html(<SearchPage user={user} />)
 
   let slug = q
   try {
@@ -162,10 +302,10 @@ app.get('/search', async (c) => {
     slug = q.replace(/^\/+|\/+$/g, '')
   }
 
-  if (!slug) return c.html(<SearchPage error="empty" query={q} />)
+  if (!slug) return c.html(<SearchPage error="empty" query={q} user={user} />)
 
   const exists = await c.env.URLS.get(urlKey(slug))
-  if (!exists) return c.html(<SearchPage error="notfound" query={q} />, 404)
+  if (!exists) return c.html(<SearchPage error="notfound" query={q} user={user} />, 404)
 
   return c.redirect(`/${slug}/stats`)
 })
@@ -181,6 +321,7 @@ app.get('/:slug/stats', async (c) => {
   const visits = statsData?.visits ?? []
   const favicon = resolveFavicon(urlData)
   const origin = new URL(c.req.url).origin
+  const user = c.get('user')
 
   if (c.req.query('view') === 'json') {
     return c.json(pruneUnknownData({
@@ -209,6 +350,7 @@ app.get('/:slug/stats', async (c) => {
       selectedMapIndex={mapIndex}
       selectedUaIndex={uaIndex}
       origin={origin}
+      user={user}
     />
   )
 })

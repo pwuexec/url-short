@@ -10,6 +10,12 @@
 			"id": "3415530c510c4f9f9264a7e6bd9ad46f"
 		}
 	],
+	"vars": {
+		"GOOGLE_CLIENT_ID": "807407300179-4do0ikprrc793uqp1vqfu2enp84v779p.apps.googleusercontent.com"
+	},
+	"dev": {
+		"port": 8792
+	},
 	"unsafe": {
 		"bindings": [
 			{

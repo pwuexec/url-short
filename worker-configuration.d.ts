@@ -11,7 +11,10 @@ declare namespace Cloudflare {
 		RL_REDIRECT: RateLimit;
 	}
 }
-interface CloudflareBindings extends Cloudflare.Env {}
+interface CloudflareBindings extends Cloudflare.Env {
+	GOOGLE_CLIENT_ID: string
+	GOOGLE_CLIENT_SECRET: string
+}
 
 // Begin runtime types
 /*! *****************************************************************************
