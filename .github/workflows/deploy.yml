@@ -8,6 +8,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -16,3 +18,13 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           command: deploy --minify
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Deploy #${{ github.run_number }}"
+          body: |
+            Deployed commit ${{ github.sha }} to 733113.xyz
+
+            **Changes:** ${{ github.event.head_commit.message }}
+          generate_release_notes: true
