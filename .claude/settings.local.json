@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(bun add -d @cloudflare/workers-types)"
+      "Bash(bun add -d @cloudflare/workers-types)",
+      "WebFetch(domain:developers.cloudflare.com)"
+    ],
+    "additionalDirectories": [
+      "e:\\Project\\url-short\\.github"
     ]
   }
 }
