@@ -18,6 +18,18 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           command: deploy --minify
+      - name: Run smoke tests
+        uses: grafana/k6-action@v0.3.1
+        with:
+          filename: k6/smoke.js
+        env:
+          BASE_URL: https://733113.xyz
+      - name: Run rate limit tests
+        uses: grafana/k6-action@v0.3.1
+        with:
+          filename: k6/rate-limit.js
+        env:
+          BASE_URL: https://733113.xyz
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
