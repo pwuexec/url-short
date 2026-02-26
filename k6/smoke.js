@@ -7,7 +7,7 @@ export const options = {
   vus: 1,
   iterations: 1,
   thresholds: {
-    http_req_failed: ['rate == 0'],
+    checks_succeeded: ['rate == 1'], // all checks must pass
     http_req_duration: ['p(95)<3000'],
   },
 }
