@@ -1,0 +1,12 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "url-short",
+	"main": "src/index.tsx",
+	"compatibility_date": "2026-02-26",
+	"kv_namespaces": [
+		{
+			"binding": "URLS",
+			"id": "3415530c510c4f9f9264a7e6bd9ad46f"
+		}
+	],
+}
