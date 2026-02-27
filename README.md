@@ -37,6 +37,48 @@ bun install
 bun run dev
 ```
 
+## Configuration
+
+This project uses three places for configuration:
+
+- `wrangler.jsonc -> vars`: non-sensitive values committed to git
+- `wrangler secret put ...`: sensitive values in Cloudflare (production)
+- `.dev.vars`: sensitive local values for `wrangler dev` (not committed)
+
+Secret binding TypeScript definitions are declared in `src/env.d.ts`.
+
+### Variables
+
+| Name | Type in code | Where to set it | Purpose |
+|---|---|---|---|
+| `GOOGLE_CLIENT_ID` | `string` | `wrangler.jsonc` `vars` | Google OAuth client id |
+| `GOOGLE_CLIENT_SECRET` | `string` | Cloudflare secret + `.dev.vars` | Google OAuth client secret |
+| `CF_ANALYTICS_API_TOKEN` | `string` | Cloudflare secret + `.dev.vars` | Token used to query Cloudflare Analytics Engine |
+| `ANALYTICS_ADMIN_EMAILS` | `string` (JSON) | Cloudflare secret + `.dev.vars` | Admin allowlist for `/analytics` |
+
+`ANALYTICS_ADMIN_EMAILS` is stored as a JSON string and parsed at runtime.
+Example value:
+
+```json
+["admin@example.com","owner@example.com"]
+```
+
+### Set production secrets
+
+```bash
+wrangler secret put GOOGLE_CLIENT_SECRET
+wrangler secret put CF_ANALYTICS_API_TOKEN
+wrangler secret put ANALYTICS_ADMIN_EMAILS
+```
+
+### Local `.dev.vars` example
+
+```env
+GOOGLE_CLIENT_SECRET=your_google_secret
+CF_ANALYTICS_API_TOKEN=your_cf_api_token
+ANALYTICS_ADMIN_EMAILS=["admin@example.com"]
+```
+
 ## Deploy
 
 ```bash

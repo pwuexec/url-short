@@ -1,7 +1,8 @@
 import type { FC } from 'hono/jsx'
 import { parseUserAgent } from './user-agent'
+import type { Visit } from './links'
 
-type User = { id: string; email: string; name: string; picture?: string; createdAt: string }
+type User = { id: string; email: string; name: string; picture?: string; createdAt: string; isAdmin?: boolean }
 
 const css = `
   :root {
@@ -330,6 +331,13 @@ const css = `
 
   .action-link.disabled { pointer-events: none; opacity: 0.5; text-decoration: none; }
 
+  .bar-chart { margin-top: 0.25rem; }
+  .bar-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
+  .bar-label { font-size: 0.6875rem; color: var(--muted); width: 5.5rem; flex-shrink: 0; text-align: right; }
+  .bar-track { flex: 1; height: 0.625rem; background: var(--line); position: relative; overflow: hidden; }
+  .bar-fill { position: absolute; left: 0; top: 0; height: 100%; background: var(--accent); }
+  .bar-count { font-size: 0.6875rem; color: var(--muted); width: 2.5rem; text-align: right; flex-shrink: 0; }
+
   .dialog-backdrop {
     position: fixed;
     inset: 0;
@@ -588,11 +596,12 @@ function getLocationName(visit: Visit): string {
   return [visit.city, visit.region, visit.country].filter(Boolean).join(', ') || 'Unknown'
 }
 
-type NavLinkKey = 'shorten' | 'analytics' | 'dashboard'
+type NavLinkKey = 'shorten' | 'analytics' | 'dashboard' | 'site-analytics'
 
 function getActiveNavLink(pathname: string): NavLinkKey {
   const normalizedPath = pathname.split('?')[0]
   if (normalizedPath === '/dashboard') return 'dashboard'
+  if (normalizedPath === '/analytics') return 'site-analytics'
   if (normalizedPath === '/search' || normalizedPath.endsWith('/stats')) return 'analytics'
   return 'shorten'
 }
@@ -659,6 +668,9 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
             <a class={`subnav-item${activeNavLink === 'analytics' ? ' active' : ''}`} href="/search">Find analytics</a>
             {user && (
               <a class={`subnav-item${activeNavLink === 'dashboard' ? ' active' : ''}`} href="/dashboard">My links</a>
+            )}
+            {user?.isAdmin && (
+              <a class={`subnav-item${activeNavLink === 'site-analytics' ? ' active' : ''}`} href="/analytics">Analytics</a>
             )}
           </div>
         </div>
@@ -752,16 +764,6 @@ export const HomePage: FC<{ created?: string; origin: string; createdUrlData?: C
   </Layout>
 )
 
-export interface Visit {
-  ip: string
-  country?: string
-  city?: string
-  region?: string
-  latitude?: number
-  longitude?: number
-  userAgent?: string
-  timestamp: string
-}
 
 export const StatsPage: FC<{
   slug: string
@@ -998,6 +1000,104 @@ export const NotFound: FC<{ code?: number; message?: string }> = ({ code = 404, 
     </section>
   </Layout>
 )
+
+type AERow = Record<string, string>
+
+export const AnalyticsPage: FC<{
+  user: User
+  created30d: number
+  visits30d: number
+  topSlugs: AERow[]
+  topCountries: AERow[]
+  dailyVisits: AERow[]
+  origin: string
+}> = ({ user, created30d, visits30d, topSlugs, topCountries, dailyVisits, origin }) => {
+  const maxVisits = Math.max(...dailyVisits.map(r => Number(r.visits)), 1)
+  const empty = topSlugs.length === 0 && topCountries.length === 0 && dailyVisits.length === 0
+
+  return (
+    <Layout title="Analytics" pathname="/analytics" user={user}>
+      <section class="card">
+        <h1 style="margin-bottom: 0.25rem">site analytics</h1>
+        <p class="subtitle" style="margin-bottom: 0.5rem">last 30 days</p>
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="label">URLs created</div>
+            <div class="value">{created30d}</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Total visits</div>
+            <div class="value">{visits30d}</div>
+          </div>
+        </div>
+      </section>
+
+      {dailyVisits.length > 0 && (
+        <section class="card">
+          <h2>visits — last 14 days</h2>
+          <div class="bar-chart">
+            {dailyVisits.map(r => {
+              const pct = Math.max((Number(r.visits) / maxVisits) * 100, 1)
+              return (
+                <div class="bar-row">
+                  <span class="bar-label">{r.day}</span>
+                  <div class="bar-track">
+                    <div class="bar-fill" style={`width: ${pct}%`} />
+                  </div>
+                  <span class="bar-count">{r.visits}</span>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {topSlugs.length > 0 && (
+        <section class="card">
+          <h2>top links — last 30 days</h2>
+          <div class="table-wrap" style="margin-top: 0.5rem">
+            <table class="visits-table">
+              <thead><tr><th>Slug</th><th>Visits</th></tr></thead>
+              <tbody>
+                {topSlugs.map(r => (
+                  <tr>
+                    <td><a href={`/${r.slug}/stats`}>{stripProtocol(origin)}/{r.slug}</a></td>
+                    <td class="mono">{r.visits}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {topCountries.length > 0 && (
+        <section class="card">
+          <h2>visitors by country — last 30 days</h2>
+          <div class="table-wrap" style="margin-top: 0.5rem">
+            <table class="visits-table">
+              <thead><tr><th>Country</th><th>Visits</th></tr></thead>
+              <tbody>
+                {topCountries.map(r => (
+                  <tr>
+                    <td><span class="country-badge">{r.country || '—'}</span></td>
+                    <td class="mono">{r.visits}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {empty && (
+        <section class="card">
+          <p class="empty">No analytics data yet — data appears once traffic is recorded.</p>
+        </section>
+      )}
+    </Layout>
+  )
+}
 
 type DashboardLink = { slug: string; target: string; favicon: string; createdAt: string }
 

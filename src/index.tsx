@@ -1,25 +1,22 @@
 import { Hono } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
-import type { HonoRequest } from 'hono'
 import { googleAuth } from '@hono/oauth-providers/google'
-import { HomePage, StatsPage, NotFound, SearchPage, DashboardPage } from './components'
-import type { Visit } from './components'
+import { HomePage, StatsPage, NotFound, SearchPage, DashboardPage, AnalyticsPage } from './components'
 import { parseUserAgent } from './user-agent'
 import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi'
 import { swaggerUI } from '@hono/swagger-ui'
 import * as v from 'valibot'
+import {
+  getClientIp, normalizeTargetUrl, resolveFavicon, parseVisitIndex,
+  sessionKey, userKey,
+  getLink, getLinkStats, createShortUrl, logVisit, getUserLinks, queryAnalyticsEngine,
+} from './links'
+import type { Visit } from './links'
 
-type User = { id: string; email: string; name: string; picture?: string; createdAt: string }
+type User = { id: string; email: string; name: string; picture?: string; createdAt: string; isAdmin?: boolean }
 type Session = { userId: string; expiresAt: string }
-type StoredUrl = { target: string; createdAt: string; favicon: string; createdByUserId?: string }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { user: User | null } }>()
-
-const urlKey = (slug: string) => `url:${slug}`
-const statsKey = (slug: string) => `stats:${slug}`
-const sessionKey = (token: string) => `session:${token}`
-const userKey = (id: string) => `user:${id}`
-const userUrlKey = (userId: string, slug: string) => `userurl:${userId}:${slug}`
 
 const SESSION_TTL = 60 * 60 * 24 * 30 // 30 days in seconds
 
@@ -59,102 +56,29 @@ const StatsResponse = v.object({
   })),
 })
 
-function getClientIp(req: HonoRequest): string {
-  return req.header('cf-connecting-ip') ?? req.header('x-forwarded-for') ?? 'unknown'
-}
-
-function generateSlug(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-  let slug = ''
-  for (let i = 0; i < 6; i++) {
-    slug += chars[Math.floor(Math.random() * chars.length)]
-  }
-  return slug
-}
-
-function normalizeTargetUrl(raw: string): string | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return null
-
-  const hasScheme = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
-  const candidate = hasScheme ? trimmed : `https://${trimmed}`
-
-  try {
-    const parsed = new URL(candidate)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
-    if (!isValidHostname(parsed.hostname)) return null
-    return parsed.toString()
-  } catch {
-    return null
-  }
-}
-
-function isPrivateIpv4(hostname: string): boolean {
-  const parts = hostname.split('.').map(Number)
-  const [a, b] = parts
-  return (
-    a === 0 ||                              // 0.0.0.0/8
-    a === 10 ||                             // 10.0.0.0/8
-    a === 127 ||                            // 127.0.0.0/8  loopback
-    (a === 169 && b === 254) ||             // 169.254.0.0/16  link-local
-    (a === 172 && b >= 16 && b <= 31) ||    // 172.16.0.0/12
-    (a === 192 && b === 168)                // 192.168.0.0/16
-  )
-}
-
-function isValidHostname(hostname: string): boolean {
-  if (!hostname) return false
-  // Reject localhost and IPv6 (includes loopback ::1 and link-local addresses)
-  if (hostname === 'localhost' || hostname.includes(':')) return false
-
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) {
-    const valid = hostname.split('.').every((segment) => {
-      const n = Number(segment)
-      return Number.isInteger(n) && n >= 0 && n <= 255
-    })
-    return valid && !isPrivateIpv4(hostname)
-  }
-
-  const normalized = hostname.endsWith('.') ? hostname.slice(0, -1) : hostname
-  const labels = normalized.split('.')
-  if (labels.length < 2) return false
-
-  return labels.every((label) => (
-    /^[a-zA-Z0-9-]{1,63}$/.test(label) &&
-    !label.startsWith('-') &&
-    !label.endsWith('-')
-  ))
-}
-
-function buildFaviconUrl(target: string): string {
-  return `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(new URL(target).origin)}`
-}
-
-function resolveFavicon(urlData: StoredUrl): string {
-  return urlData.favicon ?? buildFaviconUrl(urlData.target)
-}
-
-function parseVisitIndex(raw: string | undefined, max: number): number | undefined {
-  if (!raw) return undefined
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 0 || value >= max) return undefined
-  return value
-}
-
 // Session middleware — runs on every request
 app.use('*', async (c, next) => {
   const token = getCookie(c, 'session')
+  let userData: User | null = null
   if (token) {
     const sessionData = await c.env.URLS.get(sessionKey(token), 'json') as Session | null
     if (sessionData && new Date(sessionData.expiresAt) > new Date()) {
-      const userData = await c.env.URLS.get(userKey(sessionData.userId), 'json') as User | null
-      c.set('user', userData)
-    } else {
-      c.set('user', null)
+      userData = await c.env.URLS.get(userKey(sessionData.userId), 'json') as User | null
     }
-  } else {
-    c.set('user', null)
   }
+  const adminEmailsRaw = c.env.ANALYTICS_ADMIN_EMAILS
+  let adminEmails: string[] = []
+  if (typeof adminEmailsRaw === 'string' && adminEmailsRaw.trim() !== '') {
+    try {
+      const parsed = JSON.parse(adminEmailsRaw)
+      if (Array.isArray(parsed)) {
+        adminEmails = parsed.filter((value): value is string => typeof value === 'string')
+      }
+    } catch {
+      console.warn('[config] ANALYTICS_ADMIN_EMAILS is not valid JSON array')
+    }
+  }
+  c.set('user', userData ? { ...userData, isAdmin: adminEmails.includes(userData.email) } : null)
   await next()
 })
 
@@ -180,6 +104,7 @@ app.get('/auth/google', async (c) => {
     createdAt: (await c.env.URLS.get(userKey(googleUser.id), 'json') as User | null)?.createdAt ?? new Date().toISOString(),
   }
   await c.env.URLS.put(userKey(user.id), JSON.stringify(user))
+  console.log(`[auth:login] user=${user.id}`)
 
   const token = crypto.randomUUID()
   const expiresAt = new Date(Date.now() + SESSION_TTL * 1000).toISOString()
@@ -198,11 +123,11 @@ app.get('/auth/google', async (c) => {
 
 // Logout
 app.post('/auth/logout', async (c) => {
+  const user = c.get('user')
   const token = getCookie(c, 'session')
-  if (token) {
-    await c.env.URLS.delete(sessionKey(token))
-  }
+  if (token) await c.env.URLS.delete(sessionKey(token))
   deleteCookie(c, 'session', { path: '/' })
+  if (user) console.log(`[auth:logout] user=${user.id}`)
   return c.redirect('/')
 })
 
@@ -210,20 +135,7 @@ app.post('/auth/logout', async (c) => {
 app.get('/dashboard', async (c) => {
   const user = c.get('user')
   if (!user) return c.redirect('/auth/google')
-
-  const { keys } = await c.env.URLS.list({ prefix: `userurl:${user.id}:` })
-  const entries = await Promise.all(
-    keys.map(async (k) => {
-      const slug = k.name.replace(`userurl:${user.id}:`, '')
-      const data = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
-      return data ? { slug, ...data } : null
-    })
-  )
-
-  const links = entries
-    .filter((e): e is NonNullable<typeof e> => e !== null)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-
+  const links = await getUserLinks(c.env.URLS, user.id)
   const origin = new URL(c.req.url).origin
   return c.html(<DashboardPage user={user} links={links} origin={origin} />)
 })
@@ -238,7 +150,7 @@ app.get('/', async (c) => {
   let createdUrlData: { target: string; favicon: string; createdAt: string } | undefined
 
   if (created) {
-    const data = await c.env.URLS.get(urlKey(created), 'json') as StoredUrl | null
+    const data = await getLink(c.env.URLS, created)
     if (data) createdUrlData = { target: data.target, favicon: resolveFavicon(data), createdAt: data.createdAt }
   }
 
@@ -254,37 +166,60 @@ app.get('/', async (c) => {
   )
 })
 
+// Analytics overview
+const CF_ACCOUNT_ID = '2716bf6ee8be2880904e70f19050d2ef'
+app.get('/analytics', async (c) => {
+  const user = c.get('user')
+  if (!user) return c.redirect('/auth/google')
+  if (!user.isAdmin) return c.html(<NotFound code={403} message="forbidden" />, 403)
+
+  const token = c.env.CF_ANALYTICS_API_TOKEN
+  const [summary, topSlugs, topCountries, dailyVisits] = await Promise.all([
+    queryAnalyticsEngine(token, CF_ACCOUNT_ID,
+      `SELECT blob1 AS event, SUM(_sample_interval) AS n FROM url_shortener WHERE timestamp > NOW() - INTERVAL '30' DAY GROUP BY blob1`),
+    queryAnalyticsEngine(token, CF_ACCOUNT_ID,
+      `SELECT blob2 AS slug, SUM(_sample_interval) AS visits FROM url_shortener WHERE blob1 = 'visit' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY slug ORDER BY visits DESC LIMIT 10`),
+    queryAnalyticsEngine(token, CF_ACCOUNT_ID,
+      `SELECT blob3 AS country, SUM(_sample_interval) AS visits FROM url_shortener WHERE blob1 = 'visit' AND blob3 != '' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY country ORDER BY visits DESC LIMIT 10`),
+    queryAnalyticsEngine(token, CF_ACCOUNT_ID,
+      `SELECT toDate(timestamp) AS day, SUM(_sample_interval) AS visits FROM url_shortener WHERE blob1 = 'visit' AND timestamp > NOW() - INTERVAL '14' DAY GROUP BY day ORDER BY day`),
+  ])
+
+  const created30d = Number(summary.find(r => r.event === 'create')?.n ?? 0)
+  const visits30d = Number(summary.find(r => r.event === 'visit')?.n ?? 0)
+  return c.html(
+    <AnalyticsPage
+      user={user}
+      created30d={created30d}
+      visits30d={visits30d}
+      topSlugs={topSlugs}
+      topCountries={topCountries}
+      dailyVisits={dailyVisits}
+      origin={new URL(c.req.url).origin}
+    />
+  )
+})
+
 // Create short URL
 app.post('/', async (c) => {
-  const { success: allowed } = await c.env.RL_CREATE.limit({ key: getClientIp(c.req) })
-  if (!allowed) return c.redirect('/?error=ratelimit')
+  const ip = getClientIp(c.req)
+  const { success: allowed } = await c.env.RL_CREATE.limit({ key: ip })
+  if (!allowed) {
+    console.warn(`[ratelimit] POST / ip=${ip}`)
+    return c.redirect('/?error=ratelimit')
+  }
 
   const body = await c.req.parseBody()
   const rawTarget = (body['url'] as string ?? '').trim()
-
   if (!rawTarget) return c.redirect('/?error=empty')
 
   const target = normalizeTargetUrl(rawTarget)
   if (!target) return c.redirect(`/?error=invalid&url=${encodeURIComponent(rawTarget)}`)
 
-  let slug = generateSlug()
-  while (await c.env.URLS.get(urlKey(slug))) {
-    slug = generateSlug()
-  }
-
   const user = c.get('user')
-  await c.env.URLS.put(urlKey(slug), JSON.stringify({
-    target,
-    favicon: buildFaviconUrl(target),
-    createdAt: new Date().toISOString(),
-    ...(user ? { createdByUserId: user.id } : {}),
-  }))
-  await c.env.URLS.put(statsKey(slug), JSON.stringify({ visits: [] }))
-
-  if (user) {
-    await c.env.URLS.put(userUrlKey(user.id, slug), '1')
-  }
-
+  const { slug } = await createShortUrl(c.env.URLS, { target, userId: user?.id })
+  console.log(`[create] slug=${slug} ip=${ip}${user?.id ? ` user=${user.id}` : ''}`)
+  c.env.ANALYTICS.writeDataPoint({ blobs: ['create', slug], indexes: [slug] })
   return c.redirect(`/?created=${slug}`)
 })
 
@@ -306,7 +241,7 @@ app.get('/search', async (c) => {
 
   if (!slug) return c.html(<SearchPage error="empty" query={q} user={user} />)
 
-  const exists = await c.env.URLS.get(urlKey(slug))
+  const exists = await getLink(c.env.URLS, slug)
   if (!exists) return c.html(<SearchPage error="notfound" query={q} user={user} />, 404)
 
   return c.redirect(`/${slug}/stats`)
@@ -347,27 +282,21 @@ app.post('/api/shorten',
   }),
   validator('json', ShortenBody),
   async (c) => {
-    const { success: allowed } = await c.env.RL_CREATE.limit({ key: getClientIp(c.req) })
-    if (!allowed) return c.json({ error: 'rate limit exceeded' }, 429)
+    const ip = getClientIp(c.req)
+    const { success: allowed } = await c.env.RL_CREATE.limit({ key: ip })
+    if (!allowed) {
+      console.warn(`[ratelimit] api:shorten ip=${ip}`)
+      return c.json({ error: 'rate limit exceeded' }, 429)
+    }
 
     const { url: rawUrl } = c.req.valid('json')
     const target = normalizeTargetUrl(rawUrl)
     if (!target) return c.json({ error: 'invalid URL' }, 400)
 
-    let slug = generateSlug()
-    while (await c.env.URLS.get(urlKey(slug))) slug = generateSlug()
-
-    const createdAt = new Date().toISOString()
     const user = c.get('user')
-    await c.env.URLS.put(urlKey(slug), JSON.stringify({
-      target,
-      favicon: buildFaviconUrl(target),
-      createdAt,
-      ...(user ? { createdByUserId: user.id } : {}),
-    }))
-    await c.env.URLS.put(statsKey(slug), JSON.stringify({ visits: [] }))
-    if (user) await c.env.URLS.put(userUrlKey(user.id, slug), '1')
-
+    const { slug, createdAt } = await createShortUrl(c.env.URLS, { target, userId: user?.id })
+    console.log(`[api:create] slug=${slug} ip=${ip}${user?.id ? ` user=${user.id}` : ''}`)
+    c.env.ANALYTICS.writeDataPoint({ blobs: ['create', slug], indexes: [slug] })
     const origin = new URL(c.req.url).origin
     return c.json({ slug, shortUrl: `${origin}/${slug}`, target, createdAt }, 201)
   }
@@ -391,7 +320,7 @@ app.get('/api/links/:slug',
     if (!allowed) return c.json({ error: 'rate limit exceeded' }, 429)
 
     const { slug } = c.req.valid('param')
-    const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
+    const urlData = await getLink(c.env.URLS, slug)
     if (!urlData) return c.json({ error: 'not found' }, 404)
 
     const origin = new URL(c.req.url).origin
@@ -417,11 +346,10 @@ app.get('/api/links/:slug/stats',
     if (!allowed) return c.json({ error: 'rate limit exceeded' }, 429)
 
     const { slug } = c.req.valid('param')
-    const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
+    const urlData = await getLink(c.env.URLS, slug)
     if (!urlData) return c.json({ error: 'not found' }, 404)
 
-    const statsData = await c.env.URLS.get(statsKey(slug), 'json') as { visits: Visit[] } | null
-    const visits = statsData?.visits ?? []
+    const visits = await getLinkStats(c.env.URLS, slug)
     const origin = new URL(c.req.url).origin
     return c.json({
       slug,
@@ -438,12 +366,10 @@ app.get('/api/links/:slug/stats',
 // Stats page
 app.get('/:slug/stats', async (c) => {
   const slug = c.req.param('slug')
-  const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
-
+  const urlData = await getLink(c.env.URLS, slug)
   if (!urlData) return c.html(<NotFound />, 404)
 
-  const statsData = await c.env.URLS.get(statsKey(slug), 'json') as { visits: Visit[] } | null
-  const visits = statsData?.visits ?? []
+  const visits = await getLinkStats(c.env.URLS, slug)
   const favicon = resolveFavicon(urlData)
   const origin = new URL(c.req.url).origin
   const user = c.get('user')
@@ -456,10 +382,7 @@ app.get('/:slug/stats', async (c) => {
       favicon,
       createdAt: urlData.createdAt,
       totalVisits: visits.length,
-      visits: visits.map((visit) => ({
-        ...visit,
-        parsedUserAgent: parseUserAgent(visit.userAgent),
-      })),
+      visits: visits.map((visit) => ({ ...visit, parsedUserAgent: parseUserAgent(visit.userAgent) })),
     })
   }
 
@@ -482,12 +405,14 @@ app.get('/:slug/stats', async (c) => {
 
 // Redirect + log visit
 app.get('/:slug', async (c) => {
-  const { success: allowed } = await c.env.RL_REDIRECT.limit({ key: getClientIp(c.req) })
-  if (!allowed) return c.html(<NotFound code={429} message="too many requests" />, 429)
-
   const slug = c.req.param('slug')
-  const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
-
+  const ip = getClientIp(c.req)
+  const { success: allowed } = await c.env.RL_REDIRECT.limit({ key: ip })
+  if (!allowed) {
+    console.warn(`[ratelimit] redirect slug=${slug} ip=${ip}`)
+    return c.html(<NotFound code={429} message="too many requests" />, 429)
+  }
+  const urlData = await getLink(c.env.URLS, slug)
   if (!urlData) return c.html(<NotFound />, 404)
 
   const cf = (c.req.raw as any).cf ?? {}
@@ -502,14 +427,8 @@ app.get('/:slug', async (c) => {
     timestamp: new Date().toISOString(),
   }
 
-  c.executionCtx.waitUntil(
-    (async () => {
-      const statsData = await c.env.URLS.get(statsKey(slug), 'json') as { visits: Visit[] } | null
-      const visits = statsData?.visits ?? []
-      visits.push(visit)
-      await c.env.URLS.put(statsKey(slug), JSON.stringify({ visits }))
-    })()
-  )
+  c.executionCtx.waitUntil(logVisit(c.env.URLS, slug, visit))
+  c.env.ANALYTICS.writeDataPoint({ blobs: ['visit', slug, visit.country ?? ''], indexes: [slug] })
 
   return c.redirect(urlData.target, 302)
 })

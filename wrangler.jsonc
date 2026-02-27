@@ -4,6 +4,9 @@
 	"account_id": "2716bf6ee8be2880904e70f19050d2ef",
 	"main": "src/index.tsx",
 	"compatibility_date": "2026-02-26",
+	"analytics_engine_datasets": [
+		{ "binding": "ANALYTICS", "dataset": "url_shortener" }
+	],
 	"kv_namespaces": [
 		{
 			"binding": "URLS",
