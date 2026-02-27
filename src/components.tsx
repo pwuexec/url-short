@@ -592,9 +592,13 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
       <title>{pageTitle}</title>
       {description && <meta name="description" content={description} />}
       {noindex && <meta name="robots" content="noindex, nofollow" />}
+      <meta property="og:site_name" content="url short" />
       <meta property="og:type" content="website" />
       <meta property="og:title" content={pageTitle} />
       {description && <meta property="og:description" content={description} />}
+      <meta name="twitter:card" content="summary" />
+      <meta name="twitter:title" content={pageTitle} />
+      {description && <meta name="twitter:description" content={description} />}
       <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
       <style dangerouslySetInnerHTML={{ __html: css }} />
     </head>
@@ -669,7 +673,7 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
 type CreatedUrlData = { target: string; favicon: string; createdAt: string }
 
 export const HomePage: FC<{ created?: string; origin: string; createdUrlData?: CreatedUrlData; error?: string; inputValue?: string; user?: User | null }> = ({ created, origin, createdUrlData, error, inputValue, user }) => (
-  <Layout description="Raw URL shortener. Fast and simple." pathname="/" user={user}>
+  <Layout description="Shorten any URL instantly. Free and open — no account required." pathname="/" user={user}>
     <section class="card action-card">
       <h1>raw url shortener</h1>
       <form class="hero-form" method="post" action="/">
@@ -772,7 +776,7 @@ export const StatsPage: FC<{
   const showUaDialog = !showMapDialog && Boolean(selectedUaVisit && selectedUaParsed)
 
   return (
-    <Layout title={slug} description={`${visits.length} visit${visits.length !== 1 ? 's' : ''} - ${stripProtocol(target)}`} noindex pathname={`/${slug}/stats`} user={user}>
+    <Layout title={slug} description={`${visits.length} visit${visits.length !== 1 ? 's' : ''} — redirects to ${stripProtocol(target)}`} noindex pathname={`/${slug}/stats`} user={user}>
       <section class="card">
         <div class="stats-header">
           <div>
@@ -984,6 +988,7 @@ export const DashboardPage: FC<{ user: User; links: DashboardLink[]; origin: str
       <div class="stats-header">
         <div>
           <h1 style="margin-bottom: 0">my links</h1>
+          <p class="subtitle" style="margin-top: 0.25rem; margin-bottom: 0">newly created links can take up to 2 minutes to appear</p>
         </div>
         <div class="stats-actions">
           <a class="nav-item" href="/">+ new link</a>
