@@ -330,6 +330,8 @@ const css = `
   }
 
   .action-link.disabled { pointer-events: none; opacity: 0.5; text-decoration: none; }
+  .nav-item.danger { border-color: var(--danger); color: var(--danger); }
+  .nav-item.danger:hover { background: var(--danger); color: var(--bg); border-color: var(--danger); }
 
   .bar-chart { margin-top: 0.25rem; }
   .bar-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
@@ -427,6 +429,56 @@ const css = `
     gap: 0.5rem;
     flex-wrap: wrap;
   }
+
+  .filter-form {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.625rem;
+  }
+  .filter-group { display: flex; flex-direction: column; gap: 0.25rem; }
+  .filter-label { font-size: 0.6875rem; color: var(--muted); }
+  .filter-input {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.5rem;
+    height: 2rem;
+    border-radius: 0;
+    outline: none;
+    min-width: 7rem;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .filter-input:focus { border-color: var(--accent); }
+  .filter-actions { display: flex; gap: 0.375rem; align-self: flex-end; }
+
+  .csel { position: relative; min-width: 7rem; padding: 0; cursor: pointer; }
+  .csel-summary {
+    list-style: none; cursor: pointer; height: 2rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 0.375rem;
+    padding: 0 0.5rem;
+  }
+  .csel-summary::-webkit-details-marker { display: none; }
+  .csel:hover, .csel[open] { border-color: var(--accent); }
+  .csel-chevron { font-size: 0.6rem; opacity: 0.6; transition: transform 0.12s; flex-shrink: 0; }
+  .csel[open] .csel-chevron { transform: rotate(180deg); }
+  .csel-dropdown {
+    position: absolute; top: calc(100% + 1px); left: 0; min-width: 100%;
+    border: 1px solid var(--line); background: var(--surface); z-index: 100;
+    max-height: 12rem; overflow-y: auto;
+  }
+  .csel-item {
+    display: block; width: 100%; padding: 0.3rem 0.5rem;
+    font-size: 0.75rem; font-family: inherit; color: var(--text);
+    background: none; border: 0; border-bottom: 1px solid var(--line);
+    cursor: pointer; text-align: left; transition: background 0.1s, color 0.1s;
+  }
+  .csel-item:last-child { border-bottom: 0; }
+  .csel-item:hover, .csel-item[data-sel] { background: var(--text); color: var(--bg); }
 
   @media (max-width: 50rem) {
     .stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1002,39 +1054,89 @@ export const NotFound: FC<{ code?: number; message?: string }> = ({ code = 404, 
 )
 
 type AERow = Record<string, string>
+type AnalyticsFilters = { days: number; ip?: string; slug?: string; country?: string }
+
+const CountrySelect: FC<{ value?: string; countries: AERow[] }> = ({ value, countries }) => (
+  <div class="filter-group" id="csel-country">
+    <label class="filter-label">Country</label>
+    <input type="hidden" name="country" value={value ?? ''} />
+    <details class="csel filter-input">
+      <summary class="csel-summary">
+        <span class="csel-value">{value || 'all'}</span>
+        <span class="csel-chevron">▾</span>
+      </summary>
+      <div class="csel-dropdown">
+        <button type="button" class="csel-item" data-value="" {...(!value ? { 'data-sel': '' } : {})}>all</button>
+        {countries.map(r => (
+          <button type="button" class="csel-item" data-value={r.country || ''} {...(value === r.country ? { 'data-sel': '' } : {})}>
+            {r.country || '—'}
+          </button>
+        ))}
+      </div>
+    </details>
+  </div>
+)
 
 export const AnalyticsPage: FC<{
   user: User
-  created30d: number
-  visits30d: number
+  created: number
+  visits: number
   topSlugs: AERow[]
   topCountries: AERow[]
   dailyVisits: AERow[]
+  allCountries: AERow[]
+  filters: AnalyticsFilters
   origin: string
-}> = ({ user, created30d, visits30d, topSlugs, topCountries, dailyVisits, origin }) => {
+}> = ({ user, created, visits, topSlugs, topCountries, dailyVisits, allCountries, filters, origin }) => {
   const maxVisits = Math.max(...dailyVisits.map(r => Number(r.visits)), 1)
   const empty = topSlugs.length === 0 && topCountries.length === 0 && dailyVisits.length === 0
+  const hasActiveFilters = !!(filters.ip || filters.slug || filters.country || filters.days !== 30)
 
   return (
     <Layout title="Analytics" pathname="/analytics" user={user}>
       <section class="card">
-        <h1 style="margin-bottom: 0.25rem">site analytics</h1>
-        <p class="subtitle" style="margin-bottom: 0.5rem">last 30 days</p>
-        <div class="stat-cards">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem">
+          <h1 style="margin-bottom: 0.25rem">site analytics</h1>
+          <button type="button" class="nav-item danger" onclick="document.getElementById('reset-dialog').style.display='flex'">Reset all data</button>
+        </div>
+        <form method="get" action="/analytics" class="filter-form">
+          <div class="filter-group">
+            <label class="filter-label" for="f-days">Period</label>
+            <select id="f-days" name="days" class="filter-input">
+              {([7, 14, 30, 90] as const).map(d => (
+                <option value={String(d)} selected={filters.days === d}>{d} days</option>
+              ))}
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="f-slug">Slug</label>
+            <input id="f-slug" name="slug" class="filter-input" placeholder="abc123" value={filters.slug ?? ''} />
+          </div>
+          <CountrySelect value={filters.country} countries={allCountries} />
+          <div class="filter-group">
+            <label class="filter-label" for="f-ip">IP</label>
+            <input id="f-ip" name="ip" class="filter-input" placeholder="1.2.3.4" value={filters.ip ?? ''} />
+          </div>
+          <div class="filter-actions">
+            <button type="submit" class="nav-item">Apply</button>
+            {hasActiveFilters && <a href="/analytics" class="nav-item">Clear</a>}
+          </div>
+        </form>
+        <div class="stat-cards" style="margin-top:0.75rem">
           <div class="stat-card">
             <div class="label">URLs created</div>
-            <div class="value">{created30d}</div>
+            <div class="value">{created}</div>
           </div>
           <div class="stat-card">
             <div class="label">Total visits</div>
-            <div class="value">{visits30d}</div>
+            <div class="value">{visits}</div>
           </div>
         </div>
       </section>
 
       {dailyVisits.length > 0 && (
         <section class="card">
-          <h2>visits — last 14 days</h2>
+          <h2>visits — last {filters.days} days</h2>
           <div class="bar-chart">
             {dailyVisits.map(r => {
               const pct = Math.max((Number(r.visits) / maxVisits) * 100, 1)
@@ -1054,7 +1156,7 @@ export const AnalyticsPage: FC<{
 
       {topSlugs.length > 0 && (
         <section class="card">
-          <h2>top links — last 30 days</h2>
+          <h2>top links — last {filters.days} days</h2>
           <div class="table-wrap" style="margin-top: 0.5rem">
             <table class="visits-table">
               <thead><tr><th>Slug</th><th>Visits</th></tr></thead>
@@ -1073,7 +1175,7 @@ export const AnalyticsPage: FC<{
 
       {topCountries.length > 0 && (
         <section class="card">
-          <h2>visitors by country — last 30 days</h2>
+          <h2>visitors by country — last {filters.days} days</h2>
           <div class="table-wrap" style="margin-top: 0.5rem">
             <table class="visits-table">
               <thead><tr><th>Country</th><th>Visits</th></tr></thead>
@@ -1095,6 +1197,47 @@ export const AnalyticsPage: FC<{
           <p class="empty">No analytics data yet — data appears once traffic is recorded.</p>
         </section>
       )}
+
+      <div id="reset-dialog" class="dialog-backdrop" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+        <div class="dialog" role="dialog" aria-modal="true">
+          <div class="dialog-header">
+            <div class="dialog-title">reset all data</div>
+            <button type="button" class="dialog-close" onclick="document.getElementById('reset-dialog').style.display='none'">Close</button>
+          </div>
+          <div class="dialog-body">
+            <p style="font-size:0.8125rem;margin-bottom:0.75rem">This will permanently delete all shortened URLs, visit stats, and user link associations from KV. This action cannot be undone.</p>
+            <div style="display:flex;gap:0.5rem">
+              <form method="post" action="/admin/reset">
+                <button type="submit" class="nav-item danger">Confirm reset</button>
+              </form>
+              <button type="button" class="nav-item" onclick="document.getElementById('reset-dialog').style.display='none'">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script dangerouslySetInnerHTML={{ __html: `(function(){
+        var wrap = document.getElementById('csel-country');
+        if (!wrap) return;
+        var hidden = wrap.querySelector('input[type=hidden]');
+        var details = wrap.querySelector('details');
+        var valueSpan = wrap.querySelector('.csel-value');
+        wrap.querySelectorAll('.csel-item').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var val = btn.dataset.value;
+            hidden.value = val;
+            valueSpan.textContent = val || 'all';
+            details.removeAttribute('open');
+            wrap.querySelectorAll('.csel-item').forEach(function(b) {
+              b.toggleAttribute('data-sel', b.dataset.value === val);
+            });
+            wrap.closest('form').submit();
+          });
+        });
+        document.addEventListener('click', function(e) {
+          if (!wrap.contains(e.target)) details.removeAttribute('open');
+        });
+      })();` }} />
     </Layout>
   )
 }

@@ -168,36 +168,103 @@ app.get('/', async (c) => {
 
 // Analytics overview
 const CF_ACCOUNT_ID = '2716bf6ee8be2880904e70f19050d2ef'
+
+type AnalyticsFilters = { days: number; ip?: string; slug?: string; country?: string }
+
+function sanitizeSqlStr(val: string): string {
+  return val.replace(/'/g, "''").slice(0, 200)
+}
+
+// AE uses 'YYYY-MM-DD HH:MM:SS' datetime literals
+function toAeTs(iso: string): string {
+  return iso.replace('T', ' ').replace(/\.\d+Z$/, '').replace('Z', '')
+}
+
+function visitWhere({ days, ip, slug, country }: AnalyticsFilters, resetAt?: string): string {
+  const parts = [`blob1 = 'visit'`, `timestamp > NOW() - INTERVAL '${days}' DAY`]
+  if (resetAt) parts.push(`timestamp > toDateTime('${toAeTs(resetAt)}')`)
+  if (ip) parts.push(`blob4 = '${sanitizeSqlStr(ip)}'`)
+  if (slug) parts.push(`blob2 = '${sanitizeSqlStr(slug)}'`)
+  if (country) parts.push(`blob3 = '${sanitizeSqlStr(country)}'`)
+  return parts.join(' AND ')
+}
+
+function createWhere({ days, slug }: AnalyticsFilters, resetAt?: string): string {
+  const parts = [`blob1 = 'create'`, `timestamp > NOW() - INTERVAL '${days}' DAY`]
+  if (resetAt) parts.push(`timestamp > toDateTime('${toAeTs(resetAt)}')`)
+  if (slug) parts.push(`blob2 = '${sanitizeSqlStr(slug)}'`)
+  return parts.join(' AND ')
+}
+
 app.get('/analytics', async (c) => {
   const user = c.get('user')
   if (!user) return c.redirect('/auth/google')
   if (!user.isAdmin) return c.html(<NotFound code={403} message="forbidden" />, 403)
 
+  const rawDays = Number(c.req.query('days'))
+  const filters: AnalyticsFilters = {
+    days: [7, 14, 30, 90].includes(rawDays) ? rawDays : 30,
+    ip: c.req.query('ip')?.trim() || undefined,
+    slug: c.req.query('slug')?.trim() || undefined,
+    country: c.req.query('country')?.trim() || undefined,
+  }
+
   const token = c.env.CF_ANALYTICS_API_TOKEN
-  const [summary, topSlugs, topCountries, dailyVisits] = await Promise.all([
+  const resetAt = await c.env.URLS.get('analytics:reset_at') ?? undefined
+  const baseVisitWhere = visitWhere({ days: filters.days, slug: filters.slug }, resetAt) // for country list: no ip/country filter
+  const [createdSummary, visitsSummary, topSlugs, topCountries, dailyVisits, allCountries] = await Promise.all([
     queryAnalyticsEngine(token, CF_ACCOUNT_ID,
-      `SELECT blob1 AS event, SUM(_sample_interval) AS n FROM url_shortener WHERE timestamp > NOW() - INTERVAL '30' DAY GROUP BY blob1`),
+      `SELECT SUM(_sample_interval) AS n FROM url_shortener WHERE ${createWhere(filters, resetAt)}`),
     queryAnalyticsEngine(token, CF_ACCOUNT_ID,
-      `SELECT blob2 AS slug, SUM(_sample_interval) AS visits FROM url_shortener WHERE blob1 = 'visit' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY slug ORDER BY visits DESC LIMIT 10`),
+      `SELECT SUM(_sample_interval) AS n FROM url_shortener WHERE ${visitWhere(filters, resetAt)}`),
     queryAnalyticsEngine(token, CF_ACCOUNT_ID,
-      `SELECT blob3 AS country, SUM(_sample_interval) AS visits FROM url_shortener WHERE blob1 = 'visit' AND blob3 != '' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY country ORDER BY visits DESC LIMIT 10`),
+      `SELECT blob2 AS slug, SUM(_sample_interval) AS visits FROM url_shortener WHERE ${visitWhere(filters, resetAt)} GROUP BY slug ORDER BY visits DESC LIMIT 10`),
     queryAnalyticsEngine(token, CF_ACCOUNT_ID,
-      `SELECT toDate(timestamp) AS day, SUM(_sample_interval) AS visits FROM url_shortener WHERE blob1 = 'visit' AND timestamp > NOW() - INTERVAL '14' DAY GROUP BY day ORDER BY day`),
+      `SELECT blob3 AS country, SUM(_sample_interval) AS visits FROM url_shortener WHERE ${visitWhere(filters, resetAt)} AND blob3 != '' GROUP BY country ORDER BY visits DESC LIMIT 10`),
+    queryAnalyticsEngine(token, CF_ACCOUNT_ID,
+      `SELECT toDate(timestamp) AS day, SUM(_sample_interval) AS visits FROM url_shortener WHERE ${visitWhere(filters, resetAt)} GROUP BY day ORDER BY day`),
+    queryAnalyticsEngine(token, CF_ACCOUNT_ID,
+      `SELECT blob3 AS country FROM url_shortener WHERE ${baseVisitWhere} AND blob3 != '' GROUP BY country ORDER BY country`),
   ])
 
-  const created30d = Number(summary.find(r => r.event === 'create')?.n ?? 0)
-  const visits30d = Number(summary.find(r => r.event === 'visit')?.n ?? 0)
   return c.html(
     <AnalyticsPage
       user={user}
-      created30d={created30d}
-      visits30d={visits30d}
+      created={Number(createdSummary[0]?.n ?? 0)}
+      visits={Number(visitsSummary[0]?.n ?? 0)}
       topSlugs={topSlugs}
       topCountries={topCountries}
       dailyVisits={dailyVisits}
+      allCountries={allCountries}
+      filters={filters}
       origin={new URL(c.req.url).origin}
     />
   )
+})
+
+// Admin: reset all URL + stats data
+app.post('/admin/reset', async (c) => {
+  const user = c.get('user')
+  if (!user?.isAdmin) return c.redirect('/analytics')
+
+  const resetAt = new Date().toISOString()
+
+  await Promise.all([
+    // KV: wipe URLs, stats, user-URL associations
+    ...['url:', 'stats:', 'userurl:'].map(async (prefix) => {
+      let cursor: string | undefined
+      do {
+        const result = await c.env.URLS.list({ prefix, cursor, limit: 1000 })
+        await Promise.all(result.keys.map(k => c.env.URLS.delete(k.name)))
+        cursor = result.list_complete ? undefined : result.cursor
+      } while (cursor)
+    }),
+    // Analytics Engine is immutable — store a watermark so queries ignore pre-reset data
+    c.env.URLS.put('analytics:reset_at', resetAt),
+  ])
+
+  console.log(`[admin:reset] user=${user.id} at=${resetAt}`)
+  return c.redirect('/analytics')
 })
 
 // Create short URL
@@ -428,7 +495,7 @@ app.get('/:slug', async (c) => {
   }
 
   c.executionCtx.waitUntil(logVisit(c.env.URLS, slug, visit))
-  c.env.ANALYTICS.writeDataPoint({ blobs: ['visit', slug, visit.country ?? ''], indexes: [slug] })
+  c.env.ANALYTICS.writeDataPoint({ blobs: ['visit', slug, visit.country ?? '', visit.ip], indexes: [slug] })
 
   return c.redirect(urlData.target, 302)
 })

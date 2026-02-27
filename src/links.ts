@@ -119,7 +119,7 @@ export async function createShortUrl(
     favicon: buildFaviconUrl(target),
     createdAt,
     ...(userId ? { createdByUserId: userId } : {}),
-  }))
+  }), { metadata: { createdAt } })
   await kv.put(statsKey(slug), JSON.stringify({ visits: [] }))
   if (userId) await kv.put(userUrlKey(userId, slug), '1')
 
@@ -159,6 +159,18 @@ export async function queryAnalyticsEngine(
   } catch {
     return []
   }
+}
+
+export async function getRecentLinks(
+  kv: KVNamespace,
+  limit = 10,
+): Promise<Array<{ slug: string; createdAt: string }>> {
+  const { keys } = await kv.list<{ createdAt: string }>({ prefix: 'url:', limit: 1000 })
+  return keys
+    .filter((k): k is typeof k & { metadata: { createdAt: string } } => !!k.metadata?.createdAt)
+    .sort((a, b) => b.metadata.createdAt.localeCompare(a.metadata.createdAt))
+    .slice(0, limit)
+    .map(k => ({ slug: k.name.slice('url:'.length), createdAt: k.metadata.createdAt }))
 }
 
 export async function getUserLinks(
