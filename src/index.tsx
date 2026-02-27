@@ -172,8 +172,20 @@ app.get('/dashboard', async (c) => {
   const user = c.get('user')
   if (!user) return c.redirect('/auth/google')
 
+  // Read and immediately clear the recent_created cookie (eventual consistency fix)
+  const recentCookie = getCookie(c, 'recent_created')
+  deleteCookie(c, 'recent_created', { path: '/' })
+  const recentSlugs = recentCookie
+    ? recentCookie.split(',').filter((s) => /^[a-z0-9]{1,20}$/.test(s))
+    : []
+
   const listResult = await c.env.URLS.list({ prefix: `userurl:${user.id}:` })
   const slugs = listResult.keys.map((k) => k.name.replace(`userurl:${user.id}:`, ''))
+
+  // Merge any recently created slugs not yet visible in list()
+  for (const s of recentSlugs) {
+    if (!slugs.includes(s)) slugs.push(s)
+  }
 
   const urlEntries = await Promise.all(
     slugs.map(async (slug) => {
@@ -248,6 +260,14 @@ app.post('/', async (c) => {
 
   if (user) {
     await c.env.URLS.put(userUrlKey(user.id, slug), '1')
+    // Track slug in a short-lived cookie so the dashboard can fetch it directly
+    // even before KV list() propagates (eventual consistency workaround)
+    const existing = getCookie(c, 'recent_created') ?? ''
+    const recent = existing.split(',').filter(Boolean)
+    recent.push(slug)
+    setCookie(c, 'recent_created', recent.slice(-20).join(','), {
+      httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: 300,
+    })
   }
 
   return c.redirect(user ? `/?created=${slug}` : `/?created=${slug}&ct=${claimToken}`)

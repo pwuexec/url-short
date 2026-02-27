@@ -406,6 +406,10 @@ const css = `
 
   @media (max-width: 50rem) {
     .stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .visits-table:not(.dashboard-table) th:nth-child(5),
+    .visits-table:not(.dashboard-table) td:nth-child(5),
+    .visits-table:not(.dashboard-table) th:nth-child(6),
+    .visits-table:not(.dashboard-table) td:nth-child(6) { display: none; }
   }
 
   @media (max-width: 35rem) {
@@ -413,6 +417,13 @@ const css = `
     .hero-form button { width: 100%; }
     .stat-cards { grid-template-columns: 1fr; }
     .cookie-banner { width: 96vw; }
+    .visits-table, .dashboard-table { min-width: 0; }
+    .dashboard-table th:nth-child(3), .dashboard-table td:nth-child(3),
+    .dashboard-table th:nth-child(4), .dashboard-table td:nth-child(4) { display: none; }
+    .visits-table:not(.dashboard-table) th:nth-child(2),
+    .visits-table:not(.dashboard-table) td:nth-child(2),
+    .visits-table:not(.dashboard-table) th:nth-child(4),
+    .visits-table:not(.dashboard-table) td:nth-child(4) { display: none; }
   }
 `
 
