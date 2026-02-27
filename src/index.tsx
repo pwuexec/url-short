@@ -4,11 +4,11 @@ import type { HonoRequest } from 'hono'
 import { googleAuth } from '@hono/oauth-providers/google'
 import { HomePage, StatsPage, NotFound, SearchPage, DashboardPage } from './components'
 import type { Visit } from './components'
-import { parseUserAgent, pruneUnknownData } from './user-agent'
+import { parseUserAgent } from './user-agent'
 
 type User = { id: string; email: string; name: string; picture?: string; createdAt: string }
 type Session = { userId: string; expiresAt: string }
-type StoredUrl = { target: string; createdAt: string; favicon: string; createdByIp?: string; createdByUa?: string; createdByUserId?: string; claimToken?: string }
+type StoredUrl = { target: string; createdAt: string; favicon: string; createdByUserId?: string }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { user: User | null } }>()
 
@@ -172,29 +172,16 @@ app.get('/dashboard', async (c) => {
   const user = c.get('user')
   if (!user) return c.redirect('/auth/google')
 
-  // Read and immediately clear the recent_created cookie (eventual consistency fix)
-  const recentCookie = getCookie(c, 'recent_created')
-  deleteCookie(c, 'recent_created', { path: '/' })
-  const recentSlugs = recentCookie
-    ? recentCookie.split(',').filter((s) => /^[a-z0-9]{1,20}$/.test(s))
-    : []
-
-  const listResult = await c.env.URLS.list({ prefix: `userurl:${user.id}:` })
-  const slugs = listResult.keys.map((k) => k.name.replace(`userurl:${user.id}:`, ''))
-
-  // Merge any recently created slugs not yet visible in list()
-  for (const s of recentSlugs) {
-    if (!slugs.includes(s)) slugs.push(s)
-  }
-
-  const urlEntries = await Promise.all(
-    slugs.map(async (slug) => {
+  const { keys } = await c.env.URLS.list({ prefix: `userurl:${user.id}:` })
+  const entries = await Promise.all(
+    keys.map(async (k) => {
+      const slug = k.name.replace(`userurl:${user.id}:`, '')
       const data = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
       return data ? { slug, ...data } : null
     })
   )
 
-  const links = urlEntries
+  const links = entries
     .filter((e): e is NonNullable<typeof e> => e !== null)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
@@ -247,63 +234,19 @@ app.post('/', async (c) => {
   }
 
   const user = c.get('user')
-  const claimToken = user ? undefined : crypto.randomUUID()
   await c.env.URLS.put(urlKey(slug), JSON.stringify({
     target,
     favicon: buildFaviconUrl(target),
     createdAt: new Date().toISOString(),
-    createdByIp: getClientIp(c.req),
-    createdByUa: c.req.header('user-agent') ?? 'unknown',
-    ...(user ? { createdByUserId: user.id } : { claimToken }),
+    ...(user ? { createdByUserId: user.id } : {}),
   }))
   await c.env.URLS.put(statsKey(slug), JSON.stringify({ visits: [] }))
 
   if (user) {
     await c.env.URLS.put(userUrlKey(user.id, slug), '1')
-    // Track slug in a short-lived cookie so the dashboard can fetch it directly
-    // even before KV list() propagates (eventual consistency workaround)
-    const existing = getCookie(c, 'recent_created') ?? ''
-    const recent = existing.split(',').filter(Boolean)
-    recent.push(slug)
-    setCookie(c, 'recent_created', recent.slice(-20).join(','), {
-      httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: 300,
-    })
   }
 
-  return c.redirect(user ? `/?created=${slug}` : `/?created=${slug}&ct=${claimToken}`)
-})
-
-// Claim anonymous links after login
-app.post('/api/claim', async (c) => {
-  const user = c.get('user')
-  if (!user) return c.json({ error: 'unauthorized' }, 401)
-
-  let body: { slugs?: unknown }
-  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
-
-  if (!Array.isArray(body?.slugs)) return c.json({ error: 'invalid' }, 400)
-
-  const items = (body.slugs as unknown[]).slice(0, 50)
-
-  await Promise.all(items.map(async (item) => {
-    if (!item || typeof item !== 'object') return
-    const { slug, token } = item as Record<string, unknown>
-    if (typeof slug !== 'string' || typeof token !== 'string') return
-    if (!/^[a-z0-9]{1,20}$/.test(slug)) return
-
-    const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
-    if (!urlData) return
-    if (urlData.createdByUserId) return // already owned
-    if (!urlData.claimToken || urlData.claimToken !== token) return // wrong token
-
-    const { claimToken: _, ...rest } = urlData
-    await Promise.all([
-      c.env.URLS.put(urlKey(slug), JSON.stringify({ ...rest, createdByUserId: user.id })),
-      c.env.URLS.put(userUrlKey(user.id, slug), '1'),
-    ])
-  }))
-
-  return c.json({ ok: true })
+  return c.redirect(`/?created=${slug}`)
 })
 
 // Search page
@@ -344,18 +287,18 @@ app.get('/:slug/stats', async (c) => {
   const user = c.get('user')
 
   if (c.req.query('view') === 'json') {
-    return c.json(pruneUnknownData({
+    return c.json({
       slug,
       shortUrl: `${origin}/${slug}`,
       target: urlData.target,
       favicon,
-      createdAt: urlData.createdAt ?? null,
+      createdAt: urlData.createdAt,
       totalVisits: visits.length,
       visits: visits.map((visit) => ({
         ...visit,
         parsedUserAgent: parseUserAgent(visit.userAgent),
       })),
-    }) as Record<string, unknown>)
+    })
   }
 
   const mapIndex = parseVisitIndex(c.req.query('map'), visits.length)
@@ -388,12 +331,12 @@ app.get('/:slug', async (c) => {
   const cf = (c.req.raw as any).cf ?? {}
   const visit: Visit = {
     ip: getClientIp(c.req),
-    country: cf.country ?? 'unknown',
-    city: cf.city ?? undefined,
-    region: cf.region ?? undefined,
+    country: cf.country,
+    city: cf.city,
+    region: cf.region,
     latitude: cf.latitude ? Number(cf.latitude) : undefined,
     longitude: cf.longitude ? Number(cf.longitude) : undefined,
-    userAgent: c.req.header('user-agent') ?? 'unknown',
+    userAgent: c.req.header('user-agent'),
     timestamp: new Date().toISOString(),
   }
 

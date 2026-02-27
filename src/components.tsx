@@ -1,5 +1,5 @@
 import type { FC } from 'hono/jsx'
-import { isKnownValue, parseUserAgent } from './user-agent'
+import { parseUserAgent } from './user-agent'
 
 type User = { id: string; email: string; name: string; picture?: string; createdAt: string }
 
@@ -526,45 +526,6 @@ const cookieBannerScript = `
   })();
 `
 
-const claimStoreScript = `
-  (function () {
-    try {
-      var params = new URLSearchParams(location.search);
-      var slug = params.get('created');
-      var token = params.get('ct');
-      if (!slug || !token) return;
-      var claims = {};
-      try { claims = JSON.parse(localStorage.getItem('url-short:claims') || '{}'); } catch (_) {}
-      claims[slug] = token;
-      localStorage.setItem('url-short:claims', JSON.stringify(claims));
-      params.delete('ct');
-      var qs = params.toString();
-      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
-    } catch (_) {}
-  })();
-`
-
-const autoClaimScript = `
-  (function () {
-    try {
-      var raw = localStorage.getItem('url-short:claims');
-      if (!raw) return;
-      var claims = JSON.parse(raw);
-      var keys = Object.keys(claims);
-      if (keys.length === 0) return;
-      var pairs = keys.map(function (k) { return { slug: k, token: claims[k] }; });
-      localStorage.removeItem('url-short:claims');
-      var onDashboard = location.pathname === '/dashboard';
-      fetch('/api/claim', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slugs: pairs }),
-      }).then(function () {
-        if (onDashboard) location.reload();
-      }).catch(function () {});
-    } catch (_) {}
-  })();
-`
 
 function stripProtocol(value: string): string {
   return value.replace(/^https?:\/\//i, '')
@@ -699,8 +660,7 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
       <script dangerouslySetInnerHTML={{ __html: cookieBannerScript }} />
       <script dangerouslySetInnerHTML={{ __html: heroFormTrimScript }} />
       <script dangerouslySetInnerHTML={{ __html: copyScript }} />
-      <script dangerouslySetInnerHTML={{ __html: claimStoreScript }} />
-      {user && <script dangerouslySetInnerHTML={{ __html: autoClaimScript }} />}
+
     </body>
   </html>
   )
@@ -764,11 +724,6 @@ export const HomePage: FC<{ created?: string; origin: string; createdUrlData?: C
             </tbody>
           </table>
         </div>
-        {!user && (
-          <p class="subtitle" style="margin-top: 0.625rem; margin-bottom: 0">
-            <a href="/auth/google">sign in with google</a> to claim this link — it will appear in your dashboard automatically.
-          </p>
-        )}
       </section>
     )}
   </Layout>
@@ -776,12 +731,12 @@ export const HomePage: FC<{ created?: string; origin: string; createdUrlData?: C
 
 export interface Visit {
   ip: string
-  country: string
+  country?: string
   city?: string
   region?: string
   latitude?: number
   longitude?: number
-  userAgent: string
+  userAgent?: string
   timestamp: string
 }
 
@@ -804,7 +759,7 @@ export const StatsPage: FC<{
   origin,
   user,
 }) => {
-  const countries = new Set(visits.map((v) => v.country)).size
+  const countries = new Set(visits.map((v) => v.country).filter(Boolean)).size
   const uniqueIps = new Set(visits.map((v) => v.ip)).size
   const displayVisits = [...visits].reverse()
   const selectedMapVisit = selectedMapIndex !== undefined ? displayVisits[selectedMapIndex] : undefined
@@ -899,7 +854,7 @@ export const StatsPage: FC<{
                       </td>
                       <td class="mono">{v.ip}</td>
                       <td>
-                        <span class="country-badge">{v.country || 'unknown'}</span>
+                        {v.country && <span class="country-badge">{v.country}</span>}
                       </td>
                       <td>{parsed.browser}</td>
                       <td>{parsed.os}</td>
@@ -966,16 +921,16 @@ export const StatsPage: FC<{
               <a class="dialog-close" href={`/${slug}/stats`}>Close</a>
             </div>
             <div class="dialog-body">
-              {isKnownValue(selectedUaParsed.browser) && <p><strong>Browser:</strong> {selectedUaParsed.browser}</p>}
-              {isKnownValue(selectedUaParsed.browserVersion) && <p><strong>Browser version:</strong> {selectedUaParsed.browserVersion}</p>}
-              {isKnownValue(selectedUaParsed.os) && <p><strong>OS:</strong> {selectedUaParsed.os}</p>}
-              {isKnownValue(selectedUaParsed.osVersion) && <p><strong>OS version:</strong> {selectedUaParsed.osVersion}</p>}
-              {isKnownValue(selectedUaParsed.device) && <p><strong>Device:</strong> {selectedUaParsed.device}</p>}
-              {isKnownValue(selectedUaParsed.engine) && <p><strong>Engine:</strong> {selectedUaParsed.engine}</p>}
-              {isKnownValue(selectedUaParsed.engineVersion) && <p><strong>Engine version:</strong> {selectedUaParsed.engineVersion}</p>}
-              {isKnownValue(selectedUaParsed.platformVendor) && <p><strong>Platform vendor:</strong> {selectedUaParsed.platformVendor}</p>}
-              {isKnownValue(selectedUaParsed.platformModel) && <p><strong>Platform model:</strong> {selectedUaParsed.platformModel}</p>}
-              {isKnownValue(selectedUaParsed.platformType) && <p><strong>Platform type:</strong> {selectedUaParsed.platformType}</p>}
+              {selectedUaParsed.browser && <p><strong>Browser:</strong> {selectedUaParsed.browser}</p>}
+              {selectedUaParsed.browserVersion && <p><strong>Browser version:</strong> {selectedUaParsed.browserVersion}</p>}
+              {selectedUaParsed.os && <p><strong>OS:</strong> {selectedUaParsed.os}</p>}
+              {selectedUaParsed.osVersion && <p><strong>OS version:</strong> {selectedUaParsed.osVersion}</p>}
+              {selectedUaParsed.device && <p><strong>Device:</strong> {selectedUaParsed.device}</p>}
+              {selectedUaParsed.engine && <p><strong>Engine:</strong> {selectedUaParsed.engine}</p>}
+              {selectedUaParsed.engineVersion && <p><strong>Engine version:</strong> {selectedUaParsed.engineVersion}</p>}
+              {selectedUaParsed.platformVendor && <p><strong>Platform vendor:</strong> {selectedUaParsed.platformVendor}</p>}
+              {selectedUaParsed.platformModel && <p><strong>Platform model:</strong> {selectedUaParsed.platformModel}</p>}
+              {selectedUaParsed.platformType && <p><strong>Platform type:</strong> {selectedUaParsed.platformType}</p>}
               <p style="margin-top: 10px; font-size: 12px; color: var(--muted)">Raw UA</p>
               <pre class="mono" style="white-space: pre-wrap; word-break: break-word; margin-top: 4px">{selectedUaVisit.userAgent}</pre>
             </div>
