@@ -7,7 +7,8 @@
       "Bash(bun remove @cloudflare/workers-types)",
       "WebFetch(domain:github.com)",
       "Bash(bun add @hono/oauth-providers)",
-      "Bash(bunx tsc --noEmit)"
+      "Bash(bunx tsc --noEmit)",
+      "WebFetch(domain:hono.dev)"
     ],
     "additionalDirectories": [
       "e:\\Project\\url-short\\.github",

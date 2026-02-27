@@ -375,16 +375,32 @@ const css = `
   .not-found p { color: var(--muted); margin-bottom: 0.5rem; }
 
   .footer-inner {
-    min-height: 2.75rem;
+    min-height: 5rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.375rem;
-    flex-wrap: wrap;
     font-size: 0.6875rem;
     color: var(--muted);
-    padding: 0.5rem 0;
+    padding: 1rem 0;
   }
+
+  .footer-left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .footer-api-link {
+    margin-left: auto;
+    font-size: 0.625rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    padding: 0.2rem 0.45rem;
+    border-radius: 3px;
+  }
+  .footer-api-link:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 
   .cookie-banner {
     position: fixed;
@@ -650,8 +666,11 @@ export const Layout: FC<{ children: any; title?: string; description?: string; n
       <main class="page">{children}</main>
       <footer class="footer">
         <div class="footer-inner">
-          <span>src: <a href="https://github.com/pwuexec/url-short" target="_blank" rel="noopener noreferrer">github.com/pwuexec/url-short</a></span>
-          <span>logs: ip + ua + geo</span>
+          <div class="footer-left">
+            <span>src: <a href="https://github.com/pwuexec/url-short" target="_blank" rel="noopener noreferrer">github.com/pwuexec/url-short</a></span>
+            <span>logs: ip + ua + geo</span>
+          </div>
+          <a class="footer-api-link" target="_blank" href="/api/docs">API</a>
         </div>
       </footer>
       <div id="cookie-banner" class="cookie-banner" role="alert">

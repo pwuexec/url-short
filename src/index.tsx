@@ -5,6 +5,9 @@ import { googleAuth } from '@hono/oauth-providers/google'
 import { HomePage, StatsPage, NotFound, SearchPage, DashboardPage } from './components'
 import type { Visit } from './components'
 import { parseUserAgent } from './user-agent'
+import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi'
+import { swaggerUI } from '@hono/swagger-ui'
+import * as v from 'valibot'
 
 type User = { id: string; email: string; name: string; picture?: string; createdAt: string }
 type Session = { userId: string; expiresAt: string }
@@ -19,6 +22,42 @@ const userKey = (id: string) => `user:${id}`
 const userUrlKey = (userId: string, slug: string) => `userurl:${userId}:${slug}`
 
 const SESSION_TTL = 60 * 60 * 24 * 30 // 30 days in seconds
+
+// --- API schemas ---
+const ShortenBody = v.object({ url: v.string() })
+const SlugParam = v.object({ slug: v.string() })
+const ErrorResponse = v.object({ error: v.string() })
+const ShortenResponse = v.object({
+  slug: v.string(),
+  shortUrl: v.string(),
+  target: v.string(),
+  createdAt: v.string(),
+})
+const LinkResponse = v.object({
+  slug: v.string(),
+  shortUrl: v.string(),
+  target: v.string(),
+  favicon: v.string(),
+  createdAt: v.string(),
+})
+const StatsResponse = v.object({
+  slug: v.string(),
+  shortUrl: v.string(),
+  target: v.string(),
+  favicon: v.string(),
+  createdAt: v.string(),
+  totalVisits: v.number(),
+  visits: v.array(v.looseObject({
+    ip: v.optional(v.string()),
+    country: v.optional(v.string()),
+    city: v.optional(v.string()),
+    region: v.optional(v.string()),
+    latitude: v.optional(v.number()),
+    longitude: v.optional(v.number()),
+    userAgent: v.optional(v.string()),
+    timestamp: v.string(),
+  })),
+})
 
 function getClientIp(req: HonoRequest): string {
   return req.header('cf-connecting-ip') ?? req.header('x-forwarded-for') ?? 'unknown'
@@ -272,6 +311,129 @@ app.get('/search', async (c) => {
 
   return c.redirect(`/${slug}/stats`)
 })
+
+// --- REST API ---
+
+// Swagger UI
+app.get('/api/docs', describeRoute({ hide: true }), swaggerUI({ url: '/api/openapi.json' }))
+
+// OpenAPI spec (excludeStaticFile:true by default removes this route itself from the spec)
+app.get('/api/openapi.json', openAPIRouteHandler(app, {
+  documentation: {
+    info: { title: 'URL Shortener API', version: '1.0.0', description: 'Create and manage short URLs.' },
+  },
+  exclude: /^\/(?!api\/)/,  // hide non-/api paths (HTML pages, auth, dashboard…)
+}))
+
+// POST /api/shorten
+app.post('/api/shorten',
+  describeRoute({
+    summary: 'Create a short URL',
+    description: 'Rate limited to **5 requests per minute** per IP. Returns 429 when exceeded.',
+    tags: ['Links'],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { type: 'object', required: ['url'], properties: { url: { type: 'string', example: 'https://example.com' } } },
+        },
+      },
+    },
+    responses: {
+      201: { description: 'Created', content: { 'application/json': { schema: resolver(ShortenResponse) } } },
+      400: { description: 'Invalid URL', content: { 'application/json': { schema: resolver(ErrorResponse) } } },
+      429: { description: 'Rate limit exceeded', content: { 'application/json': { schema: resolver(ErrorResponse) } } },
+    },
+  }),
+  validator('json', ShortenBody),
+  async (c) => {
+    const { success: allowed } = await c.env.RL_CREATE.limit({ key: getClientIp(c.req) })
+    if (!allowed) return c.json({ error: 'rate limit exceeded' }, 429)
+
+    const { url: rawUrl } = c.req.valid('json')
+    const target = normalizeTargetUrl(rawUrl)
+    if (!target) return c.json({ error: 'invalid URL' }, 400)
+
+    let slug = generateSlug()
+    while (await c.env.URLS.get(urlKey(slug))) slug = generateSlug()
+
+    const createdAt = new Date().toISOString()
+    const user = c.get('user')
+    await c.env.URLS.put(urlKey(slug), JSON.stringify({
+      target,
+      favicon: buildFaviconUrl(target),
+      createdAt,
+      ...(user ? { createdByUserId: user.id } : {}),
+    }))
+    await c.env.URLS.put(statsKey(slug), JSON.stringify({ visits: [] }))
+    if (user) await c.env.URLS.put(userUrlKey(user.id, slug), '1')
+
+    const origin = new URL(c.req.url).origin
+    return c.json({ slug, shortUrl: `${origin}/${slug}`, target, createdAt }, 201)
+  }
+)
+
+// GET /api/links/:slug
+app.get('/api/links/:slug',
+  describeRoute({
+    summary: 'Get link info',
+    description: 'Rate limited to **60 requests per minute** per IP. Returns 429 when exceeded.',
+    tags: ['Links'],
+    responses: {
+      200: { description: 'Link metadata', content: { 'application/json': { schema: resolver(LinkResponse) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: resolver(ErrorResponse) } } },
+      429: { description: 'Rate limit exceeded', content: { 'application/json': { schema: resolver(ErrorResponse) } } },
+    },
+  }),
+  validator('param', SlugParam),
+  async (c) => {
+    const { success: allowed } = await c.env.RL_REDIRECT.limit({ key: getClientIp(c.req) })
+    if (!allowed) return c.json({ error: 'rate limit exceeded' }, 429)
+
+    const { slug } = c.req.valid('param')
+    const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
+    if (!urlData) return c.json({ error: 'not found' }, 404)
+
+    const origin = new URL(c.req.url).origin
+    return c.json({ slug, shortUrl: `${origin}/${slug}`, target: urlData.target, favicon: resolveFavicon(urlData), createdAt: urlData.createdAt })
+  }
+)
+
+// GET /api/links/:slug/stats
+app.get('/api/links/:slug/stats',
+  describeRoute({
+    summary: 'Get visit stats for a link',
+    description: 'Rate limited to **60 requests per minute** per IP. Returns 429 when exceeded.',
+    tags: ['Links'],
+    responses: {
+      200: { description: 'Visit stats', content: { 'application/json': { schema: resolver(StatsResponse) } } },
+      404: { description: 'Not found', content: { 'application/json': { schema: resolver(ErrorResponse) } } },
+      429: { description: 'Rate limit exceeded', content: { 'application/json': { schema: resolver(ErrorResponse) } } },
+    },
+  }),
+  validator('param', SlugParam),
+  async (c) => {
+    const { success: allowed } = await c.env.RL_REDIRECT.limit({ key: getClientIp(c.req) })
+    if (!allowed) return c.json({ error: 'rate limit exceeded' }, 429)
+
+    const { slug } = c.req.valid('param')
+    const urlData = await c.env.URLS.get(urlKey(slug), 'json') as StoredUrl | null
+    if (!urlData) return c.json({ error: 'not found' }, 404)
+
+    const statsData = await c.env.URLS.get(statsKey(slug), 'json') as { visits: Visit[] } | null
+    const visits = statsData?.visits ?? []
+    const origin = new URL(c.req.url).origin
+    return c.json({
+      slug,
+      shortUrl: `${origin}/${slug}`,
+      target: urlData.target,
+      favicon: resolveFavicon(urlData),
+      createdAt: urlData.createdAt,
+      totalVisits: visits.length,
+      visits: visits.map((visit) => ({ ...visit, parsedUserAgent: parseUserAgent(visit.userAgent) })),
+    })
+  }
+)
 
 // Stats page
 app.get('/:slug/stats', async (c) => {
