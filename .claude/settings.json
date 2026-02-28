@@ -1,5 +1,11 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(bun run tsc --noEmit)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(bun run typecheck)",
+      "Bash(bun add -d typescript)"
+    ],
     "additionalDirectories": [
       "e:\\Project\\url-short\\src"
     ]
